@@ -1,43 +1,88 @@
+export const BALL_BASE_SPEED = 400;
+export const BALL_SPEED_STEP = 20;
+export const BALL_MAX_SPEED = 800;
+
 export class Ball {
   x: number;
   y: number;
-  vx: number;
-  vy: number;
+  dirX: number;
+  dirY: number;
+  speed: number;
   readonly radius = 10;
 
   constructor(x: number, y: number) {
     this.x = x;
     this.y = y;
-    this.vx = 220;
-    this.vy = 280;
+    const angle = Math.PI * 0.3;
+    this.dirX = Math.sin(angle);
+    this.dirY = Math.cos(angle);
+    this.speed = BALL_BASE_SPEED;
   }
 
-  update(dt: number, worldW: number, worldH: number): void {
+  get vx(): number {
+    return this.dirX * this.speed;
+  }
+
+  get vy(): number {
+    return this.dirY * this.speed;
+  }
+
+  setDirection(dx: number, dy: number): void {
+    const len = Math.hypot(dx, dy) || 1;
+    this.dirX = dx / len;
+    this.dirY = dy / len;
+  }
+
+  accelerateOnBounce(): void {
+    this.speed = Math.min(this.speed + BALL_SPEED_STEP, BALL_MAX_SPEED);
+  }
+
+  resetSpeed(): void {
+    this.speed = BALL_BASE_SPEED;
+  }
+
+  update(dt: number, worldW: number): boolean {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
+    let bounced = false;
+
     if (this.x - this.radius < 0) {
       this.x = this.radius;
-      this.vx = -this.vx;
+      this.dirX = -this.dirX;
+      bounced = true;
     } else if (this.x + this.radius > worldW) {
       this.x = worldW - this.radius;
-      this.vx = -this.vx;
+      this.dirX = -this.dirX;
+      bounced = true;
     }
 
     if (this.y - this.radius < 0) {
       this.y = this.radius;
-      this.vy = -this.vy;
-    } else if (this.y + this.radius > worldH) {
-      this.y = worldH - this.radius;
-      this.vy = -this.vy;
+      this.dirY = -this.dirY;
+      bounced = true;
     }
+
+    if (bounced) this.accelerateOnBounce();
+    return bounced;
+  }
+
+  getHeat(): number {
+    const range = BALL_MAX_SPEED - BALL_BASE_SPEED;
+    return Math.min(1, Math.max(0, (this.speed - BALL_BASE_SPEED) / range));
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
+    const t = this.getHeat();
+    const r = Math.round(0 + (255 - 0) * t);
+    const g = Math.round(234 + (48 - 234) * t);
+    const b = Math.round(255 + (96 - 255) * t);
+    const color = `rgb(${r}, ${g}, ${b})`;
+
     ctx.save();
-    ctx.shadowColor = '#00eaff';
-    ctx.shadowBlur = 20;
-    ctx.fillStyle = '#00eaff';
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 20 + 20 * t;
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
