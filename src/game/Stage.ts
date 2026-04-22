@@ -3,21 +3,66 @@ import type { BrickType } from './Brick';
 
 const ROW_COLORS = ['#ff2e6a', '#ff9f2e', '#ffee00', '#2effa2', '#2e9cff', '#b52eff'];
 
-const STAGE_1 = [
-  '..........',
-  '..BBBBBB..',
-  '.BBBBBBBB.',
-  '..BBBBBB..',
-];
-
 const BRICK_HEIGHT = 26;
 const TOP_PADDING = 90;
 
-export function loadStage1(worldW: number): Brick[] {
-  return loadStage(STAGE_1, worldW);
+export interface StageData {
+  bricks: Brick[];
+  baseSpeed: number;
 }
 
-function loadStage(rows: string[], worldW: number): Brick[] {
+interface StageDef {
+  rows: string[];
+  baseSpeed: number;
+}
+
+const STAGES: StageDef[] = [
+  {
+    rows: [
+      '..........',
+      '..BBBBBB..',
+      '.BBBBBBBB.',
+      '..BBBBBB..',
+    ],
+    baseSpeed: 360,
+  },
+  {
+    rows: [
+      '..........',
+      '.BBBBBBBB.',
+      'BBBBBBBBBB',
+      'BBBBBBBBBB',
+      '.BBBBBBBB.',
+      '..........',
+    ],
+    baseSpeed: 420,
+  },
+  {
+    rows: [
+      'BBBBBBBBBB',
+      'B.BBBBBB.B',
+      'BB.BBBB.BB',
+      'BBB.BB.BBB',
+      'BB.BBBB.BB',
+      'B.BBBBBB.B',
+      'BBBBBBBBBB',
+    ],
+    baseSpeed: 500,
+  },
+];
+
+export const STAGE_COUNT = STAGES.length;
+
+export function loadStage(index: number, worldW: number): StageData {
+  const def = STAGES[index];
+  if (!def) throw new Error(`Stage ${index} not found`);
+  return {
+    bricks: buildBricks(def.rows, worldW),
+    baseSpeed: def.baseSpeed,
+  };
+}
+
+function buildBricks(rows: string[], worldW: number): Brick[] {
   const cols = rows[0].length;
   const brickW = worldW / cols;
   const bricks: Brick[] = [];

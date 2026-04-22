@@ -1,4 +1,4 @@
-export const BALL_BASE_SPEED = 400;
+export const BALL_DEFAULT_BASE_SPEED = 400;
 export const BALL_SPEED_STEP = 20;
 export const BALL_MAX_SPEED = 800;
 
@@ -8,15 +8,22 @@ export class Ball {
   dirX: number;
   dirY: number;
   speed: number;
+  baseSpeed: number;
   readonly radius = 10;
 
-  constructor(x: number, y: number) {
+  constructor(x: number, y: number, baseSpeed = BALL_DEFAULT_BASE_SPEED) {
     this.x = x;
     this.y = y;
     const angle = Math.PI * 0.3;
     this.dirX = Math.sin(angle);
     this.dirY = Math.cos(angle);
-    this.speed = BALL_BASE_SPEED;
+    this.baseSpeed = baseSpeed;
+    this.speed = baseSpeed;
+  }
+
+  setBaseSpeed(baseSpeed: number): void {
+    this.baseSpeed = baseSpeed;
+    this.speed = baseSpeed;
   }
 
   get vx(): number {
@@ -38,7 +45,7 @@ export class Ball {
   }
 
   resetSpeed(): void {
-    this.speed = BALL_BASE_SPEED;
+    this.speed = this.baseSpeed;
   }
 
   update(dt: number, worldW: number): boolean {
@@ -68,8 +75,9 @@ export class Ball {
   }
 
   getHeat(): number {
-    const range = BALL_MAX_SPEED - BALL_BASE_SPEED;
-    return Math.min(1, Math.max(0, (this.speed - BALL_BASE_SPEED) / range));
+    const range = BALL_MAX_SPEED - this.baseSpeed;
+    if (range <= 0) return 0;
+    return Math.min(1, Math.max(0, (this.speed - this.baseSpeed) / range));
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
