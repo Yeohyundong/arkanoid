@@ -3,6 +3,8 @@ import { Paddle } from './Paddle';
 import { InputHandler } from './InputHandler';
 import { Brick } from './Brick';
 import { loadStage, STAGE_COUNT } from './Stage';
+import { SaveManager } from './SaveManager';
+import { MainMenu } from './MainMenu';
 
 export const GAME_WIDTH = 540;
 export const GAME_HEIGHT = 960;
@@ -12,18 +14,20 @@ const LAUNCH_ANGLE = Math.PI / 6;
 const BRICK_SCORE = 10;
 const INITIAL_LIVES = 3;
 
-type GameState = 'playing' | 'cleared' | 'gameover' | 'ending';
+type GameState = 'menu' | 'playing' | 'cleared' | 'gameover' | 'ending';
 
 export class Game {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly ball: Ball;
   private readonly paddle: Paddle;
   private readonly input: InputHandler;
+  private readonly save: SaveManager;
+  private readonly menu: MainMenu;
   private bricks: Brick[] = [];
   private score = 0;
   private lives = INITIAL_LIVES;
   private stageIndex = 0;
-  private state: GameState = 'playing';
+  private state: GameState = 'menu';
   private lastTime = 0;
   private running = false;
   private ballAttached = true;
@@ -38,9 +42,12 @@ export class Game {
 
     this.paddle = new Paddle(GAME_WIDTH, GAME_HEIGHT);
     this.ball = new Ball(this.paddle.x, this.paddle.top - 10);
-    this.input = new InputHandler(canvas, GAME_WIDTH);
+    this.input = new InputHandler(canvas, GAME_WIDTH, GAME_HEIGHT);
+    this.save = new SaveManager();
+    this.menu = new MainMenu(GAME_WIDTH, GAME_HEIGHT);
 
     this.loadStage(0);
+    this.refreshMenu();
 
     if (import.meta.env.DEV) this.installDebugKeys();
   }
@@ -67,6 +74,10 @@ export class Game {
     this.ballAttached = true;
   }
 
+  private refreshMenu(): void {
+    this.menu.setState(this.save.hasCheckpoint(), this.save.highScore);
+  }
+
   private readonly tick = (now: number): void => {
     if (!this.running) return;
     const dt = Math.min((now - this.lastTime) / 1000, 0.05);
@@ -80,9 +91,14 @@ export class Game {
 
   private update(dt: number): void {
     const pointerX = this.input.getPointerX();
-    if (pointerX !== null) this.paddle.setTargetX(pointerX, GAME_WIDTH);
+    if (pointerX !== null && this.state === 'playing') {
+      this.paddle.setTargetX(pointerX, GAME_WIDTH);
+    }
 
     switch (this.state) {
+      case 'menu':
+        this.updateMenu();
+        break;
       case 'playing':
         this.updatePlaying(dt);
         break;
@@ -91,9 +107,38 @@ export class Game {
         break;
       case 'gameover':
       case 'ending':
-        if (this.input.consumeTap()) this.restart();
+        if (this.input.consumeTap()) this.returnToMenu();
         break;
     }
+  }
+
+  private updateMenu(): void {
+    if (!this.input.consumeTap()) return;
+    const x = this.input.getPointerX();
+    const y = this.input.getPointerY();
+    if (x === null || y === null) return;
+
+    const action = this.menu.hitTest(x, y);
+    if (action === 'new-game') this.startNewGame();
+    else if (action === 'continue') this.continueFromSave();
+  }
+
+  private startNewGame(): void {
+    this.save.clearCheckpoint();
+    this.refreshMenu();
+    this.score = 0;
+    this.lives = INITIAL_LIVES;
+    this.loadStage(0);
+    this.state = 'playing';
+  }
+
+  private continueFromSave(): void {
+    const cp = this.save.checkpoint;
+    if (!cp) return;
+    this.score = cp.score;
+    this.lives = cp.lives;
+    this.loadStage(cp.stageIndex);
+    this.state = 'playing';
   }
 
   private updatePlaying(dt: number): void {
@@ -177,7 +222,7 @@ export class Game {
     if (this.ball.y - this.ball.radius <= GAME_HEIGHT) return;
     this.lives -= 1;
     if (this.lives <= 0) {
-      this.state = 'gameover';
+      this.finishRun('gameover');
       return;
     }
     this.ball.resetSpeed();
@@ -186,7 +231,20 @@ export class Game {
 
   private checkStageClear(): void {
     if (this.bricks.some((b) => !b.destroyed)) return;
-    this.state = this.stageIndex + 1 >= STAGE_COUNT ? 'ending' : 'cleared';
+
+    const isFinal = this.stageIndex + 1 >= STAGE_COUNT;
+    if (isFinal) {
+      this.finishRun('ending');
+    } else {
+      this.save.saveCheckpoint(this.stageIndex + 1, this.lives, this.score);
+      this.state = 'cleared';
+    }
+  }
+
+  private finishRun(outcome: 'gameover' | 'ending'): void {
+    this.save.submitHighScore(this.score);
+    this.save.clearCheckpoint();
+    this.state = outcome;
   }
 
   private advanceStage(): void {
@@ -194,15 +252,19 @@ export class Game {
     this.state = 'playing';
   }
 
-  private restart(): void {
-    this.score = 0;
-    this.lives = INITIAL_LIVES;
-    this.loadStage(0);
-    this.state = 'playing';
+  private returnToMenu(): void {
+    this.refreshMenu();
+    this.state = 'menu';
   }
 
   private draw(): void {
     const { ctx } = this;
+
+    if (this.state === 'menu') {
+      this.menu.draw(ctx);
+      return;
+    }
+
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
@@ -246,10 +308,10 @@ export class Game {
       subtitle = 'Tap to continue';
     } else if (this.state === 'gameover') {
       title = 'GAME OVER';
-      subtitle = 'Tap to restart';
+      subtitle = 'Tap to return';
     } else if (this.state === 'ending') {
       title = 'YOU WIN';
-      subtitle = `TOTAL ${this.score} · Tap to restart`;
+      subtitle = `TOTAL ${this.score} · Tap to return`;
     }
 
     ctx.fillStyle = '#ffffff';
