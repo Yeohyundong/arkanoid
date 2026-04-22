@@ -1,6 +1,9 @@
-export const BALL_DEFAULT_BASE_SPEED = 400;
+import { HEAT_TIERS, heatToTier } from './Heat';
+import type { HeatTier } from './Heat';
+
+export const BALL_DEFAULT_BASE_SPEED = 500;
 export const BALL_SPEED_STEP = 20;
-export const BALL_MAX_SPEED = 800;
+export const BALL_MAX_SPEED = 1000;
 
 export class Ball {
   x: number;
@@ -80,17 +83,27 @@ export class Ball {
     return Math.min(1, Math.max(0, (this.speed - this.baseSpeed) / range));
   }
 
+  getHeatTier(): HeatTier {
+    return heatToTier(this.getHeat());
+  }
+
   draw(ctx: CanvasRenderingContext2D): void {
-    const t = this.getHeat();
-    const r = Math.round(0 + (255 - 0) * t);
-    const g = Math.round(234 + (48 - 234) * t);
-    const b = Math.round(255 + (96 - 255) * t);
-    const color = `rgb(${r}, ${g}, ${b})`;
+    const tier = this.getHeatTier();
+    const tierColor = HEAT_TIERS[tier].color;
+    const auraRadius = this.radius + 4 + 3 * tier;
 
     ctx.save();
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 20 + 20 * t;
-    ctx.fillStyle = color;
+    ctx.fillStyle = tierColor;
+    ctx.globalAlpha = 0.15 + 0.12 * tier;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, auraRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.shadowColor = tierColor;
+    ctx.shadowBlur = 10 + 8 * tier;
+    ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();

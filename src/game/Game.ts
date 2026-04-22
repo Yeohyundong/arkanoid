@@ -5,6 +5,8 @@ import { Brick } from './Brick';
 import { loadStage, STAGE_COUNT } from './Stage';
 import { SaveManager } from './SaveManager';
 import { MainMenu } from './MainMenu';
+import { HEAT_TIERS } from './Heat';
+import type { HeatTier } from './Heat';
 
 export const GAME_WIDTH = 540;
 export const GAME_HEIGHT = 960;
@@ -12,9 +14,23 @@ export const GAME_HEIGHT = 960;
 const MAX_REFLECT_ANGLE = Math.PI / 3;
 const LAUNCH_ANGLE = Math.PI / 6;
 const BRICK_SCORE = 10;
-const INITIAL_LIVES = 3;
+const LEVEL_UP_DURATION_MS = 1000;
 
-type GameState = 'menu' | 'playing' | 'cleared' | 'gameover' | 'ending';
+const COMBO_TIERS: readonly { min: number; mult: number }[] = [
+  { min: 40, mult: 3 },
+  { min: 20, mult: 2 },
+  { min: 10, mult: 1.5 },
+  { min: 5, mult: 1.2 },
+];
+
+function comboMult(combo: number): number {
+  for (const tier of COMBO_TIERS) {
+    if (combo >= tier.min) return tier.mult;
+  }
+  return 1;
+}
+
+type GameState = 'menu' | 'playing' | 'cleared' | 'ending';
 
 export class Game {
   private readonly ctx: CanvasRenderingContext2D;
@@ -25,12 +41,15 @@ export class Game {
   private readonly menu: MainMenu;
   private bricks: Brick[] = [];
   private score = 0;
-  private lives = INITIAL_LIVES;
   private stageIndex = 0;
   private state: GameState = 'menu';
   private lastTime = 0;
   private running = false;
   private ballAttached = true;
+  private combo = 0;
+  private prevHeatTier: HeatTier = 0;
+  private levelUpAt = 0;
+  private levelUpTier: HeatTier = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -55,7 +74,7 @@ export class Game {
   private installDebugKeys(): void {
     window.addEventListener('keydown', (e) => {
       if (e.key === 'n' || e.key === 'N') {
-        for (const brick of this.bricks) brick.destroyed = true;
+        for (const brick of this.bricks) brick.hp = 0;
       }
     });
   }
@@ -72,6 +91,8 @@ export class Game {
     this.bricks = data.bricks;
     this.ball.setBaseSpeed(data.baseSpeed);
     this.ballAttached = true;
+    this.combo = 0;
+    this.prevHeatTier = 0;
   }
 
   private refreshMenu(): void {
@@ -105,7 +126,6 @@ export class Game {
       case 'cleared':
         if (this.input.consumeTap()) this.advanceStage();
         break;
-      case 'gameover':
       case 'ending':
         if (this.input.consumeTap()) this.returnToMenu();
         break;
@@ -127,7 +147,6 @@ export class Game {
     this.save.clearCheckpoint();
     this.refreshMenu();
     this.score = 0;
-    this.lives = INITIAL_LIVES;
     this.loadStage(0);
     this.state = 'playing';
   }
@@ -136,7 +155,6 @@ export class Game {
     const cp = this.save.checkpoint;
     if (!cp) return;
     this.score = cp.score;
-    this.lives = cp.lives;
     this.loadStage(cp.stageIndex);
     this.state = 'playing';
   }
@@ -152,11 +170,20 @@ export class Game {
       return;
     }
 
-    this.ball.update(dt, GAME_WIDTH);
-    this.handlePaddleCollision();
-    this.handleBrickCollisions();
-    this.checkStageClear();
-    if (this.state === 'playing') this.handleBottomOut();
+    const stepDist = this.ball.radius;
+    const steps = Math.max(1, Math.ceil(this.ball.speed * dt / stepDist));
+    const subDt = dt / steps;
+
+    for (let i = 0; i < steps; i++) {
+      this.ball.update(subDt, GAME_WIDTH);
+      this.handlePaddleCollision();
+      this.handleBrickCollisions();
+      this.detectHeatTierChange();
+      this.checkStageClear();
+      if (this.state !== 'playing') return;
+      if (this.ball.y - this.ball.radius > GAME_HEIGHT) break;
+    }
+    this.handleBottomOut();
   }
 
   private launchBall(): void {
@@ -180,6 +207,7 @@ export class Game {
     ball.setDirection(Math.sin(angle), -Math.cos(angle));
 
     ball.accelerateOnBounce();
+    this.combo = 0;
   }
 
   private handleBrickCollisions(): void {
@@ -211,22 +239,35 @@ export class Game {
         ball.y += movingDown ? -penY : penY;
       }
 
-      brick.destroyed = true;
+      brick.damage();
       ball.accelerateOnBounce();
-      this.score += BRICK_SCORE;
+      this.combo += 1;
+      this.awardBrickHitScore();
       return;
     }
   }
 
+  private awardBrickHitScore(): void {
+    const heatMult = HEAT_TIERS[this.ball.getHeatTier()].mult;
+    const cMult = comboMult(this.combo);
+    this.score += Math.round(BRICK_SCORE * heatMult * cMult);
+  }
+
+  private detectHeatTierChange(): void {
+    const tier = this.ball.getHeatTier();
+    if (tier > this.prevHeatTier) {
+      this.levelUpAt = performance.now();
+      this.levelUpTier = tier;
+    }
+    this.prevHeatTier = tier;
+  }
+
   private handleBottomOut(): void {
     if (this.ball.y - this.ball.radius <= GAME_HEIGHT) return;
-    this.lives -= 1;
-    if (this.lives <= 0) {
-      this.finishRun('gameover');
-      return;
-    }
+    this.combo = 0;
     this.ball.resetSpeed();
     this.ballAttached = true;
+    this.prevHeatTier = 0;
   }
 
   private checkStageClear(): void {
@@ -234,17 +275,13 @@ export class Game {
 
     const isFinal = this.stageIndex + 1 >= STAGE_COUNT;
     if (isFinal) {
-      this.finishRun('ending');
+      this.save.submitHighScore(this.score);
+      this.save.clearCheckpoint();
+      this.state = 'ending';
     } else {
-      this.save.saveCheckpoint(this.stageIndex + 1, this.lives, this.score);
+      this.save.saveCheckpoint(this.stageIndex + 1, this.score);
       this.state = 'cleared';
     }
-  }
-
-  private finishRun(outcome: 'gameover' | 'ending'): void {
-    this.save.submitHighScore(this.score);
-    this.save.clearCheckpoint();
-    this.state = outcome;
   }
 
   private advanceStage(): void {
@@ -272,6 +309,7 @@ export class Game {
     this.paddle.draw(ctx);
     this.ball.draw(ctx);
     this.drawHud();
+    this.drawLevelUp();
 
     if (this.state !== 'playing') this.drawOverlay();
   }
@@ -279,19 +317,57 @@ export class Game {
   private drawHud(): void {
     const { ctx } = this;
     ctx.save();
-    ctx.fillStyle = '#e6e6ff';
     ctx.font = '600 22px system-ui, sans-serif';
     ctx.textBaseline = 'top';
 
+    ctx.fillStyle = '#e6e6ff';
     ctx.textAlign = 'left';
-    ctx.fillText(`SCORE ${this.score}`, 20, 20);
+    ctx.fillText(`SCORE ${this.score}`, 20, 16);
 
     ctx.textAlign = 'center';
-    ctx.fillText(`STAGE ${this.stageIndex + 1}`, GAME_WIDTH / 2, 20);
+    ctx.fillText(`STAGE ${this.stageIndex + 1}`, GAME_WIDTH / 2, 16);
 
+    ctx.font = '600 16px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    const cMult = comboMult(this.combo);
+    ctx.fillStyle = this.combo >= 5 ? '#2effa2' : '#8a8ab0';
+    ctx.fillText(`COMBO ${this.combo}  ×${cMult}`, 20, 52);
+
+    const tier = this.ball.getHeatTier();
+    const tierDef = HEAT_TIERS[tier];
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#ff6a9a';
-    ctx.fillText(`${'♥'.repeat(this.lives)}`, GAME_WIDTH - 20, 20);
+    ctx.fillStyle = tierDef.color;
+    ctx.fillText(`${tierDef.name}  ×${tierDef.mult}`, GAME_WIDTH - 20, 52);
+
+    ctx.restore();
+  }
+
+  private drawLevelUp(): void {
+    const elapsed = performance.now() - this.levelUpAt;
+    if (elapsed >= LEVEL_UP_DURATION_MS) return;
+
+    const progress = elapsed / LEVEL_UP_DURATION_MS;
+    const alpha = 1 - progress;
+    const scale = 1 + progress * 0.4;
+    const tierDef = HEAT_TIERS[this.levelUpTier];
+
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.translate(GAME_WIDTH / 2, GAME_HEIGHT / 2);
+    ctx.scale(scale, scale);
+
+    ctx.shadowColor = tierDef.color;
+    ctx.shadowBlur = 24;
+    ctx.fillStyle = tierDef.color;
+    ctx.font = '800 56px system-ui, sans-serif';
+    ctx.fillText('LEVEL UP!', 0, -14);
+
+    ctx.font = '700 28px system-ui, sans-serif';
+    ctx.fillText(`${tierDef.name}  ×${tierDef.mult}`, 0, 30);
+
     ctx.restore();
   }
 
@@ -306,9 +382,6 @@ export class Game {
     if (this.state === 'cleared') {
       title = 'STAGE CLEAR';
       subtitle = 'Tap to continue';
-    } else if (this.state === 'gameover') {
-      title = 'GAME OVER';
-      subtitle = 'Tap to return';
     } else if (this.state === 'ending') {
       title = 'YOU WIN';
       subtitle = `TOTAL ${this.score} · Tap to return`;

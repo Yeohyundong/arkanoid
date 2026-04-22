@@ -1,10 +1,9 @@
 import { Brick } from './Brick';
-import type { BrickType } from './Brick';
 
-const ROW_COLORS = ['#ff2e6a', '#ff9f2e', '#ffee00', '#2effa2', '#2e9cff', '#b52eff'];
+const ROW_COLORS = ['#ff2e6a', '#ff9f2e', '#ffee00', '#2effa2', '#2e9cff', '#b52eff', '#ff2e6a'];
 
 const BRICK_HEIGHT = 26;
-const TOP_PADDING = 90;
+const TOP_PADDING = 110;
 
 export interface StageData {
   bricks: Brick[];
@@ -20,32 +19,33 @@ const STAGES: StageDef[] = [
   {
     rows: [
       '..........',
-      '..BBBBBB..',
-      '.BBBBBBBB.',
-      '..BBBBBB..',
+      '.11111111.',
+      '1111111111',
+      '1111111111',
+      '.11111111.',
     ],
-    baseSpeed: 360,
+    baseSpeed: 500,
   },
   {
     rows: [
       '..........',
-      '.BBBBBBBB.',
-      'BBBBBBBBBB',
-      'BBBBBBBBBB',
-      '.BBBBBBBB.',
-      '..........',
+      '1111111111',
+      '1222222221',
+      '1222222221',
+      '1111111111',
+      '.11111111.',
     ],
-    baseSpeed: 420,
+    baseSpeed: 500,
   },
   {
     rows: [
-      'BBBBBBBBBB',
-      'B.BBBBBB.B',
-      'BB.BBBB.BB',
-      'BBB.BB.BBB',
-      'BB.BBBB.BB',
-      'B.BBBBBB.B',
-      'BBBBBBBBBB',
+      '1111111111',
+      '1222222221',
+      '1233333321',
+      '1233333321',
+      '1222222221',
+      '1111111111',
+      '.11111111.',
     ],
     baseSpeed: 500,
   },
@@ -70,20 +70,19 @@ function buildBricks(rows: string[], worldW: number): Brick[] {
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
     for (let c = 0; c < cols; c++) {
-      const ch = row[c];
-      const type = charToType(ch);
-      if (!type) continue;
+      const hp = charToHp(row[c]);
+      if (hp === null) continue;
 
       const x = c * brickW + brickW / 2;
       const y = TOP_PADDING + r * BRICK_HEIGHT + BRICK_HEIGHT / 2;
       const color = ROW_COLORS[r % ROW_COLORS.length];
-      bricks.push(new Brick(x, y, brickW, BRICK_HEIGHT, type, color));
+      bricks.push(new Brick(x, y, brickW, BRICK_HEIGHT, hp, color));
     }
   }
   return bricks;
 }
 
-function charToType(ch: string): BrickType | null {
-  if (ch === 'B') return 'normal';
+function charToHp(ch: string): number | null {
+  if (ch >= '1' && ch <= '9') return Number(ch);
   return null;
 }
