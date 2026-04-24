@@ -1,13 +1,15 @@
-const STORAGE_KEY = 'arkanoid:save:v1';
+const STORAGE_KEY = 'arkanoid:save:v4';
 
-interface Checkpoint {
+interface ArcadeCheckpoint {
   stageIndex: number;
   score: number;
+  lives: number;
 }
 
 interface Persisted {
-  checkpoint: Checkpoint | null;
-  highScore: number;
+  arcadeHighScore: number;
+  waveHighScore: number;
+  arcadeCheckpoint: ArcadeCheckpoint | null;
 }
 
 export class SaveManager {
@@ -17,32 +19,43 @@ export class SaveManager {
     this.data = this.read();
   }
 
-  get checkpoint(): Checkpoint | null {
-    return this.data.checkpoint;
+  get arcadeHighScore(): number {
+    return this.data.arcadeHighScore;
   }
 
-  get highScore(): number {
-    return this.data.highScore;
+  get waveHighScore(): number {
+    return this.data.waveHighScore;
   }
 
-  hasCheckpoint(): boolean {
-    return this.data.checkpoint !== null;
+  get arcadeCheckpoint(): ArcadeCheckpoint | null {
+    return this.data.arcadeCheckpoint;
   }
 
-  saveCheckpoint(stageIndex: number, score: number): void {
-    this.data.checkpoint = { stageIndex, score };
+  hasArcadeCheckpoint(): boolean {
+    return this.data.arcadeCheckpoint !== null;
+  }
+
+  saveArcadeCheckpoint(stageIndex: number, score: number, lives: number): void {
+    this.data.arcadeCheckpoint = { stageIndex, score, lives };
     this.write();
   }
 
-  clearCheckpoint(): void {
-    if (this.data.checkpoint === null) return;
-    this.data.checkpoint = null;
+  clearArcadeCheckpoint(): void {
+    if (this.data.arcadeCheckpoint === null) return;
+    this.data.arcadeCheckpoint = null;
     this.write();
   }
 
-  submitHighScore(score: number): boolean {
-    if (score <= this.data.highScore) return false;
-    this.data.highScore = score;
+  submitArcadeHighScore(score: number): boolean {
+    if (score <= this.data.arcadeHighScore) return false;
+    this.data.arcadeHighScore = score;
+    this.write();
+    return true;
+  }
+
+  submitWaveHighScore(score: number): boolean {
+    if (score <= this.data.waveHighScore) return false;
+    this.data.waveHighScore = score;
     this.write();
     return true;
   }
@@ -50,24 +63,30 @@ export class SaveManager {
   private read(): Persisted {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { checkpoint: null, highScore: 0 };
+      if (!raw) return this.defaults();
       const parsed = JSON.parse(raw);
       return {
-        checkpoint: this.parseCheckpoint(parsed.checkpoint),
-        highScore: Number(parsed.highScore) || 0,
+        arcadeHighScore: Number(parsed.arcadeHighScore) || 0,
+        waveHighScore: Number(parsed.waveHighScore) || 0,
+        arcadeCheckpoint: this.parseCheckpoint(parsed.arcadeCheckpoint),
       };
     } catch {
-      return { checkpoint: null, highScore: 0 };
+      return this.defaults();
     }
   }
 
-  private parseCheckpoint(v: unknown): Checkpoint | null {
+  private defaults(): Persisted {
+    return { arcadeHighScore: 0, waveHighScore: 0, arcadeCheckpoint: null };
+  }
+
+  private parseCheckpoint(v: unknown): ArcadeCheckpoint | null {
     if (!v || typeof v !== 'object') return null;
     const c = v as Record<string, unknown>;
     const stageIndex = Number(c.stageIndex);
     const score = Number(c.score);
-    if (!Number.isFinite(stageIndex) || !Number.isFinite(score)) return null;
-    return { stageIndex, score };
+    const lives = Number(c.lives);
+    if (!Number.isFinite(stageIndex) || !Number.isFinite(score) || !Number.isFinite(lives)) return null;
+    return { stageIndex, score, lives };
   }
 
   private write(): void {

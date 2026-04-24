@@ -1,13 +1,15 @@
-export type MenuAction = 'new-game' | 'continue';
+export type MenuAction = 'arcade-new' | 'arcade-continue' | 'wave-new';
 
 interface Button {
   action: MenuAction;
   label: string;
+  sub?: string;
   x: number;
   y: number;
   width: number;
   height: number;
   enabled: boolean;
+  accent: string;
 }
 
 export class MainMenu {
@@ -15,7 +17,8 @@ export class MainMenu {
   private readonly worldH: number;
   private buttons: Button[] = [];
   private canContinue = false;
-  private highScore = 0;
+  private arcadeHigh = 0;
+  private waveHigh = 0;
 
   constructor(worldW: number, worldH: number) {
     this.worldW = worldW;
@@ -23,9 +26,10 @@ export class MainMenu {
     this.rebuildButtons();
   }
 
-  setState(canContinue: boolean, highScore: number): void {
+  setState(canContinue: boolean, arcadeHigh: number, waveHigh: number): void {
     this.canContinue = canContinue;
-    this.highScore = highScore;
+    this.arcadeHigh = arcadeHigh;
+    this.waveHigh = waveHigh;
     this.rebuildButtons();
   }
 
@@ -51,12 +55,9 @@ export class MainMenu {
     ctx.shadowBlur = 24;
     ctx.fillStyle = '#ff3df4';
     ctx.font = '800 72px system-ui, sans-serif';
-    ctx.fillText('ARKANOID', this.worldW / 2, 260);
+    ctx.fillText('ARKANOID', this.worldW / 2, 220);
 
     ctx.shadowBlur = 0;
-    ctx.fillStyle = '#8a8ab0';
-    ctx.font = '500 18px system-ui, sans-serif';
-    ctx.fillText(`BEST  ${this.highScore}`, this.worldW / 2, 340);
 
     for (const b of this.buttons) this.drawButton(ctx, b);
 
@@ -66,7 +67,7 @@ export class MainMenu {
   private drawButton(ctx: CanvasRenderingContext2D, b: Button): void {
     const cx = b.x + b.width / 2;
     const cy = b.y + b.height / 2;
-    const color = b.enabled ? '#2effa2' : '#3a3a4a';
+    const color = b.enabled ? b.accent : '#3a3a4a';
 
     ctx.save();
     ctx.strokeStyle = color;
@@ -78,34 +79,56 @@ export class MainMenu {
     ctx.strokeRect(b.x, b.y, b.width, b.height);
     ctx.restore();
 
+    const hasSub = !!b.sub;
     ctx.fillStyle = color;
-    ctx.font = '700 28px system-ui, sans-serif';
-    ctx.fillText(b.label, cx, cy);
+    ctx.font = '700 26px system-ui, sans-serif';
+    ctx.fillText(b.label, cx, hasSub ? cy - 10 : cy);
+
+    if (b.sub) {
+      ctx.fillStyle = b.enabled ? '#8a8ab0' : '#3a3a4a';
+      ctx.font = '500 14px system-ui, sans-serif';
+      ctx.fillText(b.sub, cx, cy + 16);
+    }
   }
 
   private rebuildButtons(): void {
     const width = 320;
-    const height = 72;
+    const height = 70;
     const x = (this.worldW - width) / 2;
 
     this.buttons = [
       {
-        action: 'new-game',
-        label: 'NEW GAME',
+        action: 'arcade-new',
+        label: 'ARCADE',
+        sub: `BEST ${this.arcadeHigh}`,
         x,
-        y: 480,
+        y: 360,
         width,
         height,
         enabled: true,
+        accent: '#ffc94a',
       },
       {
-        action: 'continue',
+        action: 'arcade-continue',
         label: 'CONTINUE',
+        sub: 'arcade checkpoint',
+        x,
+        y: 440,
+        width,
+        height,
+        enabled: this.canContinue,
+        accent: '#8abfff',
+      },
+      {
+        action: 'wave-new',
+        label: 'WAVE',
+        sub: `BEST ${this.waveHigh}`,
         x,
         y: 580,
         width,
         height,
-        enabled: this.canContinue,
+        enabled: true,
+        accent: '#2effa2',
       },
     ];
   }

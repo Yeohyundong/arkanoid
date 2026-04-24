@@ -2,7 +2,16 @@ import { Ball } from './Ball';
 import { Paddle } from './Paddle';
 import { InputHandler } from './InputHandler';
 import { Brick } from './Brick';
-import { loadStage, STAGE_COUNT } from './Stage';
+import {
+  loadArcadeStage,
+  ARCADE_STAGE_COUNT,
+  loadInitialWave,
+  generateWaveRow,
+  getWaveIntervalMs,
+  BRICK_HEIGHT,
+  GRID_COLS,
+  BASE_SPEED,
+} from './Stage';
 import { SaveManager } from './SaveManager';
 import { MainMenu } from './MainMenu';
 import { HEAT_TIERS } from './Heat';
@@ -24,8 +33,12 @@ const ITEM_BLOCK_LIFETIME_MS = 10000;
 const ENLARGE_DURATION_MS = 8000;
 const FIREBALL_DURATION_MS = 5000;
 const HEAT_BOOST_STACKS = 15;
+const THRESHOLD_ROWS_ABOVE_PADDLE = 3;
+const ITEM_BLOCK_BODY_COLOR = '#1e1e2e';
+const ARCADE_STARTING_LIVES = 3;
 
 type GameState = 'menu' | 'playing' | 'cleared' | 'ending';
+type GameMode = 'arcade' | 'wave';
 
 interface ComboFloater {
   x: number;
@@ -46,14 +59,20 @@ export class Game {
   private bricks: Brick[] = [];
   private items: Item[] = [];
   private score = 0;
-  private stageIndex = 0;
-  private baseSpeed = 500;
+  private baseSpeed = BASE_SPEED;
   private state: GameState = 'menu';
+  private mode: GameMode = 'arcade';
   private lastTime = 0;
   private running = false;
   private ballAttached = true;
   private floaters: ComboFloater[] = [];
   private nextItemSpawnAt = 0;
+  private stageIndex = 0;
+  private arcadeLives = ARCADE_STARTING_LIVES;
+  private waveNumber = 1;
+  private nextWaveAt = 0;
+  private thresholdY = 0;
+  private lastRunNewBest = false;
 
   constructor(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -69,7 +88,7 @@ export class Game {
     this.save = new SaveManager();
     this.menu = new MainMenu(GAME_WIDTH, GAME_HEIGHT);
 
-    this.loadStage(0);
+    this.thresholdY = this.paddle.top - THRESHOLD_ROWS_ABOVE_PADDLE * BRICK_HEIGHT;
     this.refreshMenu();
 
     if (import.meta.env.DEV) this.installDebugKeys();
@@ -89,20 +108,12 @@ export class Game {
     requestAnimationFrame(this.tick);
   }
 
-  private loadStage(index: number): void {
-    const data = loadStage(index, GAME_WIDTH);
-    this.stageIndex = index;
-    this.bricks = data.bricks;
-    this.baseSpeed = data.baseSpeed;
-    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
-    this.items = [];
-    this.ballAttached = true;
-    this.floaters = [];
-    this.nextItemSpawnAt = performance.now() + ITEM_BLOCK_SPAWN_INTERVAL_MS;
-  }
-
   private refreshMenu(): void {
-    this.menu.setState(this.save.hasCheckpoint(), this.save.highScore);
+    this.menu.setState(
+      this.save.hasArcadeCheckpoint(),
+      this.save.arcadeHighScore,
+      this.save.waveHighScore,
+    );
   }
 
   private readonly tick = (now: number): void => {
@@ -130,7 +141,7 @@ export class Game {
         this.updatePlaying(dt);
         break;
       case 'cleared':
-        if (this.input.consumeTap()) this.advanceStage();
+        if (this.input.consumeTap()) this.advanceArcadeStage();
         break;
       case 'ending':
         if (this.input.consumeTap()) this.returnToMenu();
@@ -145,24 +156,64 @@ export class Game {
     if (x === null || y === null) return;
 
     const action = this.menu.hitTest(x, y);
-    if (action === 'new-game') this.startNewGame();
-    else if (action === 'continue') this.continueFromSave();
+    if (action === 'arcade-new') this.startArcadeNew();
+    else if (action === 'arcade-continue') this.startArcadeContinue();
+    else if (action === 'wave-new') this.startWaveNew();
   }
 
-  private startNewGame(): void {
-    this.save.clearCheckpoint();
-    this.refreshMenu();
+  private startArcadeNew(): void {
+    this.save.clearArcadeCheckpoint();
+    this.mode = 'arcade';
     this.score = 0;
-    this.loadStage(0);
+    this.arcadeLives = ARCADE_STARTING_LIVES;
+    this.loadArcade(0);
+    this.state = 'playing';
+    this.refreshMenu();
+  }
+
+  private startArcadeContinue(): void {
+    const cp = this.save.arcadeCheckpoint;
+    if (!cp) return;
+    this.mode = 'arcade';
+    this.score = cp.score;
+    this.arcadeLives = cp.lives;
+    this.loadArcade(cp.stageIndex);
     this.state = 'playing';
   }
 
-  private continueFromSave(): void {
-    const cp = this.save.checkpoint;
-    if (!cp) return;
-    this.score = cp.score;
-    this.loadStage(cp.stageIndex);
+  private startWaveNew(): void {
+    this.mode = 'wave';
+    this.score = 0;
+    this.loadWave();
     this.state = 'playing';
+  }
+
+  private loadArcade(index: number): void {
+    const data = loadArcadeStage(index, GAME_WIDTH);
+    this.stageIndex = index;
+    this.bricks = data.bricks;
+    this.baseSpeed = data.baseSpeed;
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+    this.items = [];
+    this.ballAttached = true;
+    this.floaters = [];
+    this.paddle.resetEffects();
+    this.nextItemSpawnAt = performance.now() + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+  }
+
+  private loadWave(): void {
+    const data = loadInitialWave(GAME_WIDTH);
+    this.bricks = data.bricks;
+    this.baseSpeed = data.baseSpeed;
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+    this.items = [];
+    this.ballAttached = true;
+    this.floaters = [];
+    this.paddle.resetEffects();
+    this.waveNumber = 1;
+    const now = performance.now();
+    this.nextItemSpawnAt = now + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+    this.nextWaveAt = now + getWaveIntervalMs(this.waveNumber);
   }
 
   private updatePlaying(dt: number): void {
@@ -175,6 +226,11 @@ export class Game {
       ball.y = this.paddle.top - ball.radius;
       if (tapped) this.launchBall();
       return;
+    }
+
+    if (this.mode === 'wave') {
+      this.tickWave();
+      if (this.state !== 'playing') return;
     }
 
     this.tickItemBlocks();
@@ -193,20 +249,78 @@ export class Game {
         this.emitComboMilestones(ball, prevStack);
       }
       this.updateItems(subDt);
-      this.checkStageClear();
+      if (this.mode === 'arcade') this.checkArcadeClear();
       if (this.state !== 'playing') return;
     }
     this.handleBottomOut();
   }
 
+  private tickWave(): void {
+    const now = performance.now();
+    if (now < this.nextWaveAt) return;
+
+    for (const brick of this.bricks) {
+      if (brick.destroyed) continue;
+      brick.y += BRICK_HEIGHT;
+    }
+
+    this.bricks = this.bricks.filter((b) => !b.destroyed);
+
+    const newRow = generateWaveRow(this.waveNumber, GAME_WIDTH);
+    this.bricks.push(...newRow);
+
+    this.waveNumber += 1;
+    this.nextWaveAt = now + getWaveIntervalMs(this.waveNumber);
+
+    this.checkWaveGameOver();
+  }
+
+  private checkWaveGameOver(): void {
+    for (const brick of this.bricks) {
+      if (brick.destroyed) continue;
+      if (brick.bottom > this.thresholdY) {
+        this.endWaveGame();
+        return;
+      }
+    }
+  }
+
+  private endWaveGame(): void {
+    this.lastRunNewBest = this.save.submitWaveHighScore(this.score);
+    this.state = 'ending';
+  }
+
+  private checkArcadeClear(): void {
+    if (this.bricks.some((b) => !b.destroyed && !b.itemType)) return;
+
+    const isFinal = this.stageIndex + 1 >= ARCADE_STAGE_COUNT;
+    if (isFinal) {
+      this.finalizeArcade();
+    } else {
+      this.save.saveArcadeCheckpoint(this.stageIndex + 1, this.score, this.arcadeLives);
+      this.state = 'cleared';
+    }
+  }
+
+  private finalizeArcade(): void {
+    this.lastRunNewBest = this.save.submitArcadeHighScore(this.score);
+    this.save.clearArcadeCheckpoint();
+    this.state = 'ending';
+  }
+
+  private advanceArcadeStage(): void {
+    this.loadArcade(this.stageIndex + 1);
+    this.state = 'playing';
+  }
+
   private tickItemBlocks(): void {
     const now = performance.now();
 
-    for (const brick of this.bricks) {
+    for (let i = this.bricks.length - 1; i >= 0; i--) {
+      const brick = this.bricks[i];
       if (!brick.itemType || brick.destroyed) continue;
       if (now - brick.itemSpawnedAt >= ITEM_BLOCK_LIFETIME_MS) {
-        brick.itemType = null;
-        brick.itemSpawnedAt = 0;
+        this.bricks.splice(i, 1);
       }
     }
 
@@ -215,22 +329,35 @@ export class Game {
 
     if (this.ballAttached) return;
 
-    const eligible: Brick[] = [];
-    let maxY = -Infinity;
+    let wallMaxY = -Infinity;
     for (const b of this.bricks) {
       if (b.destroyed || b.itemType) continue;
-      if (b.y > maxY) maxY = b.y;
+      if (b.y > wallMaxY) wallMaxY = b.y;
     }
-    if (!isFinite(maxY)) return;
-    for (const b of this.bricks) {
-      if (b.destroyed || b.itemType) continue;
-      if (Math.abs(b.y - maxY) < 1) eligible.push(b);
-    }
-    if (eligible.length === 0) return;
+    if (!isFinite(wallMaxY)) return;
 
-    const pick = eligible[Math.floor(Math.random() * eligible.length)];
-    pick.itemType = ITEM_POOL[Math.floor(Math.random() * ITEM_POOL.length)];
-    pick.itemSpawnedAt = now;
+    const itemY = wallMaxY + BRICK_HEIGHT;
+    if (itemY + BRICK_HEIGHT / 2 > this.thresholdY) return;
+
+    const brickW = GAME_WIDTH / GRID_COLS;
+    const occupied = new Set<number>();
+    for (const b of this.bricks) {
+      if (b.destroyed) continue;
+      if (Math.abs(b.y - itemY) < 1) {
+        occupied.add(Math.round((b.x - brickW / 2) / brickW));
+      }
+    }
+    const avail: number[] = [];
+    for (let c = 0; c < GRID_COLS; c++) if (!occupied.has(c)) avail.push(c);
+    if (avail.length === 0) return;
+
+    const col = avail[Math.floor(Math.random() * avail.length)];
+    const x = col * brickW + brickW / 2;
+    const itemType = ITEM_POOL[Math.floor(Math.random() * ITEM_POOL.length)];
+    const newBrick = new Brick(x, itemY, brickW, BRICK_HEIGHT, 1, ITEM_BLOCK_BODY_COLOR);
+    newBrick.itemType = itemType;
+    newBrick.itemSpawnedAt = now;
+    this.bricks.push(newBrick);
   }
 
   private emitComboMilestones(ball: Ball, prevStack: number): void {
@@ -391,29 +518,17 @@ export class Game {
         this.balls.splice(i, 1);
       }
     }
-    if (this.balls.length === 0) {
-      this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
-      this.ballAttached = true;
+    if (this.balls.length > 0) return;
+
+    if (this.mode === 'arcade') {
+      this.arcadeLives -= 1;
+      if (this.arcadeLives <= 0) {
+        this.finalizeArcade();
+        return;
+      }
     }
-  }
-
-  private checkStageClear(): void {
-    if (this.bricks.some((b) => !b.destroyed)) return;
-
-    const isFinal = this.stageIndex + 1 >= STAGE_COUNT;
-    if (isFinal) {
-      this.save.submitHighScore(this.score);
-      this.save.clearCheckpoint();
-      this.state = 'ending';
-    } else {
-      this.save.saveCheckpoint(this.stageIndex + 1, this.score);
-      this.state = 'cleared';
-    }
-  }
-
-  private advanceStage(): void {
-    this.loadStage(this.stageIndex + 1);
-    this.state = 'playing';
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+    this.ballAttached = true;
   }
 
   private returnToMenu(): void {
@@ -432,6 +547,7 @@ export class Game {
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
+    if (this.mode === 'wave') this.drawThresholdLine();
     for (const brick of this.bricks) brick.draw(ctx);
     for (const item of this.items) item.draw(ctx);
     this.paddle.draw(ctx);
@@ -440,6 +556,20 @@ export class Game {
     this.drawHud();
 
     if (this.state !== 'playing') this.drawOverlay();
+  }
+
+  private drawThresholdLine(): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = '#ff3d5c';
+    ctx.globalAlpha = 0.35;
+    ctx.setLineDash([8, 8]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, this.thresholdY);
+    ctx.lineTo(GAME_WIDTH, this.thresholdY);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawHud(): void {
@@ -452,9 +582,41 @@ export class Game {
     ctx.textAlign = 'left';
     ctx.fillText(`SCORE ${this.score}`, 20, 16);
 
-    ctx.textAlign = 'center';
-    ctx.fillText(`STAGE ${this.stageIndex + 1}`, GAME_WIDTH / 2, 16);
+    if (this.mode === 'arcade') this.drawLifeIcons();
 
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#8a8ab0';
+    ctx.font = '500 16px system-ui, sans-serif';
+    const centerLabel = this.mode === 'arcade'
+      ? `STAGE ${this.stageIndex + 1}/${ARCADE_STAGE_COUNT}`
+      : `WAVE ${this.waveNumber}`;
+    ctx.fillText(centerLabel, GAME_WIDTH / 2, 20);
+
+    const savedBest = this.mode === 'arcade' ? this.save.arcadeHighScore : this.save.waveHighScore;
+    ctx.font = '500 16px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = this.score > savedBest ? '#2effa2' : '#8a8ab0';
+    const bestDisplay = Math.max(savedBest, this.score);
+    ctx.fillText(`BEST ${bestDisplay}`, GAME_WIDTH - 20, 20);
+
+    ctx.restore();
+  }
+
+  private drawLifeIcons(): void {
+    const { ctx } = this;
+    const iconRadius = 6;
+    const gap = 6;
+    const y = 54;
+    ctx.save();
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < this.arcadeLives; i++) {
+      const cx = 20 + iconRadius + i * (iconRadius * 2 + gap);
+      ctx.beginPath();
+      ctx.arc(cx, y, iconRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -495,28 +657,49 @@ export class Game {
   private drawOverlay(): void {
     const { ctx } = this;
     ctx.save();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
-    let title = '';
-    let subtitle = '';
     if (this.state === 'cleared') {
-      title = 'STAGE CLEAR';
-      subtitle = 'Tap to continue';
-    } else if (this.state === 'ending') {
-      title = 'YOU WIN';
-      subtitle = `TOTAL ${this.score} · Tap to return`;
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 56px system-ui, sans-serif';
+      ctx.fillText('STAGE CLEAR', GAME_WIDTH / 2, GAME_HEIGHT / 2 - 20);
+
+      ctx.fillStyle = '#c0c0ff';
+      ctx.font = '500 20px system-ui, sans-serif';
+      ctx.fillText('Tap to continue', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40);
+    } else {
+      // 'ending'
+      const title = this.mode === 'wave' ? 'GAME OVER' : 'YOU WIN';
+      const titleColor = this.mode === 'wave' ? '#ff3d5c' : '#2effa2';
+
+      ctx.fillStyle = titleColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 56px system-ui, sans-serif';
+      ctx.fillText(title, GAME_WIDTH / 2, GAME_HEIGHT / 2 - 80);
+
+      ctx.fillStyle = '#e6e6ff';
+      ctx.font = '700 40px system-ui, sans-serif';
+      ctx.fillText(`SCORE  ${this.score}`, GAME_WIDTH / 2, GAME_HEIGHT / 2 - 10);
+
+      if (this.lastRunNewBest) {
+        ctx.fillStyle = '#2effa2';
+        ctx.font = '700 22px system-ui, sans-serif';
+        ctx.fillText('NEW BEST!', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 30);
+      } else {
+        const savedBest = this.mode === 'arcade' ? this.save.arcadeHighScore : this.save.waveHighScore;
+        ctx.fillStyle = '#8a8ab0';
+        ctx.font = '500 20px system-ui, sans-serif';
+        ctx.fillText(`BEST  ${savedBest}`, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 30);
+      }
+
+      ctx.fillStyle = '#c0c0ff';
+      ctx.font = '500 20px system-ui, sans-serif';
+      ctx.fillText('Tap to return', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 90);
     }
-
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '700 56px system-ui, sans-serif';
-    ctx.fillText(title, GAME_WIDTH / 2, GAME_HEIGHT / 2 - 30);
-
-    ctx.font = '500 22px system-ui, sans-serif';
-    ctx.fillStyle = '#c0c0ff';
-    ctx.fillText(subtitle, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 30);
     ctx.restore();
   }
 }

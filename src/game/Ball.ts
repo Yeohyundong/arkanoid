@@ -15,6 +15,7 @@ export class Ball {
   stack = 0;
   fireballUntil = 0;
   readonly radius = 10;
+  private fireTrail: { x: number; y: number; bornAt: number }[] = [];
 
   constructor(x: number, y: number, baseSpeed = BALL_DEFAULT_BASE_SPEED) {
     this.x = x;
@@ -103,7 +104,26 @@ export class Ball {
     }
 
     if (bounced) this.accelerateOnBounce();
+    this.recordFireTrail();
     return bounced;
+  }
+
+  private recordFireTrail(): void {
+    const now = performance.now();
+    if (!this.isFireball) {
+      if (this.fireTrail.length > 0) this.fireTrail.length = 0;
+      return;
+    }
+    while (this.fireTrail.length > 0 && now - this.fireTrail[0].bornAt > 350) {
+      this.fireTrail.shift();
+    }
+    const last = this.fireTrail[this.fireTrail.length - 1];
+    if (last) {
+      const dx = this.x - last.x;
+      const dy = this.y - last.y;
+      if (dx * dx + dy * dy < 16) return;
+    }
+    this.fireTrail.push({ x: this.x, y: this.y, bornAt: now });
   }
 
   getHeatTier(): HeatTier {
@@ -111,39 +131,49 @@ export class Ball {
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
+    if (this.fireTrail.length > 0) this.drawFireTrail(ctx);
+
     const tier = this.getHeatTier();
     const tierColor = HEAT_TIERS[tier].color;
-    const auraRadius = this.radius + 4 + 3 * tier;
+    const auraRadius = this.radius + 3 + 1.5 * tier;
 
     ctx.save();
     ctx.fillStyle = tierColor;
-    ctx.globalAlpha = 0.15 + 0.12 * tier;
+    ctx.globalAlpha = 0.15 + 0.1 * tier;
     ctx.beginPath();
     ctx.arc(this.x, this.y, auraRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
-    if (this.isFireball) {
-      const flicker = 0.7 + 0.3 * Math.sin(performance.now() * 0.03);
-      ctx.save();
-      ctx.strokeStyle = '#ff6a2e';
-      ctx.shadowColor = '#ff6a2e';
-      ctx.shadowBlur = 14;
-      ctx.globalAlpha = flicker;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
     ctx.save();
     ctx.shadowColor = tierColor;
-    ctx.shadowBlur = 10 + 8 * tier;
+    ctx.shadowBlur = 8 + 5 * tier;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  private drawFireTrail(ctx: CanvasRenderingContext2D): void {
+    const now = performance.now();
+    ctx.save();
+    ctx.shadowColor = '#ff6a2e';
+    ctx.shadowBlur = 14;
+    for (let i = 0; i < this.fireTrail.length; i++) {
+      const p = this.fireTrail[i];
+      const age = now - p.bornAt;
+      const t = Math.min(1, age / 350);
+      if (t >= 1) continue;
+      const alpha = (1 - t) * 0.75;
+      const rad = (1 - t * 0.5) * this.radius * 0.9;
+      const color = t < 0.4 ? '#ffee66' : t < 0.75 ? '#ff8a2e' : '#ff3d2e';
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 }
