@@ -1,3 +1,6 @@
+import type { ItemType } from './Item';
+import { ITEM_COLORS } from './Item';
+
 export class Brick {
   readonly x: number;
   readonly y: number;
@@ -6,6 +9,8 @@ export class Brick {
   readonly color: string;
   readonly maxHp: number;
   hp: number;
+  itemType: ItemType | null = null;
+  itemSpawnedAt = 0;
 
   constructor(x: number, y: number, width: number, height: number, hp: number, color: string) {
     this.x = x;
@@ -54,12 +59,36 @@ export class Brick {
     ctx.fillRect(this.left + 1, this.top + 1, this.width - 2, this.height - 2);
     ctx.restore();
 
-    ctx.save();
-    ctx.fillStyle = '#0a0a0f';
-    ctx.font = '700 14px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(this.hp), this.x, this.y + 1);
-    ctx.restore();
+    if (this.itemType) {
+      const now = performance.now();
+      const age = now - this.itemSpawnedAt;
+      const warning = age > 6000;
+      const pulseFreq = warning ? 0.022 : 0.006;
+      const pulseMin = warning ? 0.15 : 0.5;
+      const pulse = pulseMin + (1 - pulseMin) * (0.5 + 0.5 * Math.sin(now * pulseFreq));
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = ITEM_COLORS[this.itemType];
+      ctx.lineWidth = warning ? 3 : 2;
+      ctx.strokeRect(this.left + 1, this.top + 1, this.width - 2, this.height - 2);
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = ITEM_COLORS[this.itemType];
+      ctx.font = '700 14px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.itemType, this.x, this.y + 1);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.fillStyle = '#0a0a0f';
+      ctx.font = '700 14px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(this.hp), this.x, this.y + 1);
+      ctx.restore();
+    }
   }
 }

@@ -12,6 +12,7 @@ export class InputHandler {
     this.worldH = worldH;
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerdown', this.onPointerDown);
+    window.addEventListener('pointerdown', this.onWindowPointerDown);
   }
 
   getPointerX(): number | null {
@@ -42,6 +43,11 @@ export class InputHandler {
 
   private readonly onPointerDown = (e: PointerEvent): void => {
     this.updatePointer(e);
+    this.tapPending = true;
+  };
+
+  private readonly onWindowPointerDown = (e: PointerEvent): void => {
+    if (e.target === this.canvas) return;
     this.tapPending = true;
   };
 }

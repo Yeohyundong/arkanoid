@@ -7,6 +7,8 @@ import { SaveManager } from './SaveManager';
 import { MainMenu } from './MainMenu';
 import { HEAT_TIERS } from './Heat';
 import type { HeatTier } from './Heat';
+import { Item, ITEM_POOL } from './Item';
+import type { ItemType } from './Item';
 
 export const GAME_WIDTH = 540;
 export const GAME_HEIGHT = 960;
@@ -14,42 +16,44 @@ export const GAME_HEIGHT = 960;
 const MAX_REFLECT_ANGLE = Math.PI / 3;
 const LAUNCH_ANGLE = Math.PI / 6;
 const BRICK_SCORE = 10;
-const LEVEL_UP_DURATION_MS = 1000;
-
-const COMBO_TIERS: readonly { min: number; mult: number }[] = [
-  { min: 40, mult: 3 },
-  { min: 20, mult: 2 },
-  { min: 10, mult: 1.5 },
-  { min: 5, mult: 1.2 },
-];
-
-function comboMult(combo: number): number {
-  for (const tier of COMBO_TIERS) {
-    if (combo >= tier.min) return tier.mult;
-  }
-  return 1;
-}
+const FLOATER_MS_SMALL = 700;
+const FLOATER_MS_BIG = 1000;
+const MULTIBALL_ANGLE_OFFSET = Math.PI / 6;
+const ITEM_BLOCK_SPAWN_INTERVAL_MS = 4000;
+const ITEM_BLOCK_LIFETIME_MS = 10000;
+const ENLARGE_DURATION_MS = 8000;
+const FIREBALL_DURATION_MS = 5000;
+const HEAT_BOOST_STACKS = 15;
 
 type GameState = 'menu' | 'playing' | 'cleared' | 'ending';
 
+interface ComboFloater {
+  x: number;
+  y: number;
+  value: number;
+  tier: HeatTier;
+  bornAt: number;
+  big: boolean;
+}
+
 export class Game {
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly ball: Ball;
   private readonly paddle: Paddle;
   private readonly input: InputHandler;
   private readonly save: SaveManager;
   private readonly menu: MainMenu;
+  private balls: Ball[] = [];
   private bricks: Brick[] = [];
+  private items: Item[] = [];
   private score = 0;
   private stageIndex = 0;
+  private baseSpeed = 500;
   private state: GameState = 'menu';
   private lastTime = 0;
   private running = false;
   private ballAttached = true;
-  private combo = 0;
-  private prevHeatTier: HeatTier = 0;
-  private levelUpAt = 0;
-  private levelUpTier: HeatTier = 0;
+  private floaters: ComboFloater[] = [];
+  private nextItemSpawnAt = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -60,7 +64,7 @@ export class Game {
     canvas.height = GAME_HEIGHT;
 
     this.paddle = new Paddle(GAME_WIDTH, GAME_HEIGHT);
-    this.ball = new Ball(this.paddle.x, this.paddle.top - 10);
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10)];
     this.input = new InputHandler(canvas, GAME_WIDTH, GAME_HEIGHT);
     this.save = new SaveManager();
     this.menu = new MainMenu(GAME_WIDTH, GAME_HEIGHT);
@@ -89,10 +93,12 @@ export class Game {
     const data = loadStage(index, GAME_WIDTH);
     this.stageIndex = index;
     this.bricks = data.bricks;
-    this.ball.setBaseSpeed(data.baseSpeed);
+    this.baseSpeed = data.baseSpeed;
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+    this.items = [];
     this.ballAttached = true;
-    this.combo = 0;
-    this.prevHeatTier = 0;
+    this.floaters = [];
+    this.nextItemSpawnAt = performance.now() + ITEM_BLOCK_SPAWN_INTERVAL_MS;
   }
 
   private refreshMenu(): void {
@@ -162,37 +168,98 @@ export class Game {
   private updatePlaying(dt: number): void {
     const tapped = this.input.consumeTap();
 
-    if (this.ballAttached) {
+    if (this.ballAttached && this.balls.length > 0) {
+      const ball = this.balls[0];
       const attachOffset = (LAUNCH_ANGLE / MAX_REFLECT_ANGLE) * (this.paddle.width / 2);
-      this.ball.x = this.paddle.x + attachOffset;
-      this.ball.y = this.paddle.top - this.ball.radius;
+      ball.x = this.paddle.x + attachOffset;
+      ball.y = this.paddle.top - ball.radius;
       if (tapped) this.launchBall();
       return;
     }
 
-    const stepDist = this.ball.radius;
-    const steps = Math.max(1, Math.ceil(this.ball.speed * dt / stepDist));
+    this.tickItemBlocks();
+
+    const stepDist = 10;
+    const maxSpeed = this.balls.reduce((m, b) => Math.max(m, b.speed), 0);
+    const steps = Math.max(1, Math.ceil(maxSpeed * dt / stepDist));
     const subDt = dt / steps;
 
     for (let i = 0; i < steps; i++) {
-      this.ball.update(subDt, GAME_WIDTH);
-      this.handlePaddleCollision();
-      this.handleBrickCollisions();
-      this.detectHeatTierChange();
+      for (const ball of this.balls) {
+        const prevStack = ball.stack;
+        ball.update(subDt, GAME_WIDTH);
+        this.handlePaddleCollision(ball);
+        this.handleBrickCollisions(ball);
+        this.emitComboMilestones(ball, prevStack);
+      }
+      this.updateItems(subDt);
       this.checkStageClear();
       if (this.state !== 'playing') return;
-      if (this.ball.y - this.ball.radius > GAME_HEIGHT) break;
     }
     this.handleBottomOut();
   }
 
+  private tickItemBlocks(): void {
+    const now = performance.now();
+
+    for (const brick of this.bricks) {
+      if (!brick.itemType || brick.destroyed) continue;
+      if (now - brick.itemSpawnedAt >= ITEM_BLOCK_LIFETIME_MS) {
+        brick.itemType = null;
+        brick.itemSpawnedAt = 0;
+      }
+    }
+
+    if (now < this.nextItemSpawnAt) return;
+    this.nextItemSpawnAt = now + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+
+    if (this.ballAttached) return;
+
+    const eligible: Brick[] = [];
+    let maxY = -Infinity;
+    for (const b of this.bricks) {
+      if (b.destroyed || b.itemType) continue;
+      if (b.y > maxY) maxY = b.y;
+    }
+    if (!isFinite(maxY)) return;
+    for (const b of this.bricks) {
+      if (b.destroyed || b.itemType) continue;
+      if (Math.abs(b.y - maxY) < 1) eligible.push(b);
+    }
+    if (eligible.length === 0) return;
+
+    const pick = eligible[Math.floor(Math.random() * eligible.length)];
+    pick.itemType = ITEM_POOL[Math.floor(Math.random() * ITEM_POOL.length)];
+    pick.itemSpawnedAt = now;
+  }
+
+  private emitComboMilestones(ball: Ball, prevStack: number): void {
+    const newStack = ball.stack;
+    if (newStack <= prevStack) return;
+    const now = performance.now();
+    for (let s = prevStack + 1; s <= newStack; s++) {
+      if (s % 5 !== 0) continue;
+      const tierDef = HEAT_TIERS.find((t) => t.minStack === s);
+      const big = !!tierDef;
+      this.floaters.push({
+        x: ball.x,
+        y: ball.y,
+        value: s,
+        tier: ball.getHeatTier(),
+        bornAt: now,
+        big,
+      });
+    }
+  }
+
   private launchBall(): void {
-    this.ball.setDirection(Math.sin(LAUNCH_ANGLE), -Math.cos(LAUNCH_ANGLE));
+    if (this.balls.length === 0) return;
+    this.balls[0].setDirection(Math.sin(LAUNCH_ANGLE), -Math.cos(LAUNCH_ANGLE));
     this.ballAttached = false;
   }
 
-  private handlePaddleCollision(): void {
-    const { ball, paddle } = this;
+  private handlePaddleCollision(ball: Ball): void {
+    const { paddle } = this;
     if (ball.vy <= 0) return;
 
     const withinX = ball.x + ball.radius >= paddle.left && ball.x - ball.radius <= paddle.right;
@@ -207,11 +274,9 @@ export class Game {
     ball.setDirection(Math.sin(angle), -Math.cos(angle));
 
     ball.accelerateOnBounce();
-    this.combo = 0;
   }
 
-  private handleBrickCollisions(): void {
-    const { ball } = this;
+  private handleBrickCollisions(ball: Ball): void {
     for (const brick of this.bricks) {
       if (brick.destroyed) continue;
 
@@ -221,53 +286,115 @@ export class Game {
       const dy = ball.y - cy;
       if (dx * dx + dy * dy > ball.radius * ball.radius) continue;
 
-      const movingRight = ball.dirX > 0;
-      const movingDown = ball.dirY > 0;
+      if (!ball.isFireball) {
+        const movingRight = ball.dirX > 0;
+        const movingDown = ball.dirY > 0;
 
-      const penX = movingRight
-        ? ball.x + ball.radius - brick.left
-        : brick.right - (ball.x - ball.radius);
-      const penY = movingDown
-        ? ball.y + ball.radius - brick.top
-        : brick.bottom - (ball.y - ball.radius);
+        const penX = movingRight
+          ? ball.x + ball.radius - brick.left
+          : brick.right - (ball.x - ball.radius);
+        const penY = movingDown
+          ? ball.y + ball.radius - brick.top
+          : brick.bottom - (ball.y - ball.radius);
 
-      if (penX < penY) {
-        ball.dirX = -ball.dirX;
-        ball.x += movingRight ? -penX : penX;
-      } else {
-        ball.dirY = -ball.dirY;
-        ball.y += movingDown ? -penY : penY;
+        if (penX < penY) {
+          ball.dirX = -ball.dirX;
+          ball.x += movingRight ? -penX : penX;
+        } else {
+          ball.dirY = -ball.dirY;
+          ball.y += movingDown ? -penY : penY;
+        }
       }
 
       brick.damage();
       ball.accelerateOnBounce();
-      this.combo += 1;
-      this.awardBrickHitScore();
+      this.awardBrickHitScore(ball);
+
+      if (brick.destroyed && brick.itemType) {
+        this.items.push(new Item(brick.x, brick.y, brick.itemType));
+      }
+
+      if (ball.isFireball) continue;
       return;
     }
   }
 
-  private awardBrickHitScore(): void {
-    const heatMult = HEAT_TIERS[this.ball.getHeatTier()].mult;
-    const cMult = comboMult(this.combo);
-    this.score += Math.round(BRICK_SCORE * heatMult * cMult);
+  private awardBrickHitScore(ball: Ball): void {
+    const heatMult = HEAT_TIERS[ball.getHeatTier()].mult;
+    this.score += Math.round(BRICK_SCORE * heatMult);
   }
 
-  private detectHeatTierChange(): void {
-    const tier = this.ball.getHeatTier();
-    if (tier > this.prevHeatTier) {
-      this.levelUpAt = performance.now();
-      this.levelUpTier = tier;
+  private updateItems(dt: number): void {
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const item = this.items[i];
+      item.update(dt);
+      if (this.itemHitsPaddle(item)) {
+        this.applyItemEffect(item.type);
+        this.items.splice(i, 1);
+        continue;
+      }
+      if (item.bottom > GAME_HEIGHT && item.vy > 0) {
+        item.y = GAME_HEIGHT - item.height / 2;
+        item.vy = -Math.abs(item.vy);
+      } else if (item.top < 0 && item.vy < 0) {
+        item.y = item.height / 2;
+        item.vy = Math.abs(item.vy);
+      }
     }
-    this.prevHeatTier = tier;
+  }
+
+  private itemHitsPaddle(item: Item): boolean {
+    const { paddle } = this;
+    return (
+      item.right >= paddle.left &&
+      item.left <= paddle.right &&
+      item.bottom >= paddle.top &&
+      item.top <= paddle.bottom
+    );
+  }
+
+  private applyItemEffect(type: ItemType): void {
+    switch (type) {
+      case 'M': this.spawnMultiBall(); break;
+      case 'E': this.paddle.enlarge(ENLARGE_DURATION_MS); break;
+      case 'F': for (const b of this.balls) b.grantFireball(FIREBALL_DURATION_MS); break;
+      case 'H': this.heatBoost(); break;
+    }
+  }
+
+  private heatBoost(): void {
+    for (const ball of this.balls) {
+      const prev = ball.stack;
+      ball.addHeatStacks(HEAT_BOOST_STACKS);
+      this.emitComboMilestones(ball, prev);
+    }
+  }
+
+  private spawnMultiBall(): void {
+    if (this.balls.length === 0 || this.ballAttached) return;
+    const primary = this.balls[0];
+    const baseAngle = Math.atan2(primary.dirX, -primary.dirY);
+    for (const delta of [MULTIBALL_ANGLE_OFFSET, -MULTIBALL_ANGLE_OFFSET]) {
+      const newBall = new Ball(primary.x, primary.y, primary.baseSpeed);
+      const angle = baseAngle + delta;
+      newBall.setDirection(Math.sin(angle), -Math.cos(angle));
+      newBall.speed = primary.speed;
+      newBall.stack = primary.stack;
+      this.balls.push(newBall);
+    }
   }
 
   private handleBottomOut(): void {
-    if (this.ball.y - this.ball.radius <= GAME_HEIGHT) return;
-    this.combo = 0;
-    this.ball.resetSpeed();
-    this.ballAttached = true;
-    this.prevHeatTier = 0;
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const ball = this.balls[i];
+      if (ball.y - ball.radius > GAME_HEIGHT) {
+        this.balls.splice(i, 1);
+      }
+    }
+    if (this.balls.length === 0) {
+      this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+      this.ballAttached = true;
+    }
   }
 
   private checkStageClear(): void {
@@ -306,10 +433,11 @@ export class Game {
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
     for (const brick of this.bricks) brick.draw(ctx);
+    for (const item of this.items) item.draw(ctx);
     this.paddle.draw(ctx);
-    this.ball.draw(ctx);
+    for (const ball of this.balls) ball.draw(ctx);
+    this.drawFloaters();
     this.drawHud();
-    this.drawLevelUp();
 
     if (this.state !== 'playing') this.drawOverlay();
   }
@@ -327,48 +455,41 @@ export class Game {
     ctx.textAlign = 'center';
     ctx.fillText(`STAGE ${this.stageIndex + 1}`, GAME_WIDTH / 2, 16);
 
-    ctx.font = '600 16px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    const cMult = comboMult(this.combo);
-    ctx.fillStyle = this.combo >= 5 ? '#2effa2' : '#8a8ab0';
-    ctx.fillText(`COMBO ${this.combo}  ×${cMult}`, 20, 52);
-
-    const tier = this.ball.getHeatTier();
-    const tierDef = HEAT_TIERS[tier];
-    ctx.textAlign = 'right';
-    ctx.fillStyle = tierDef.color;
-    ctx.fillText(`${tierDef.name}  ×${tierDef.mult}`, GAME_WIDTH - 20, 52);
-
     ctx.restore();
   }
 
-  private drawLevelUp(): void {
-    const elapsed = performance.now() - this.levelUpAt;
-    if (elapsed >= LEVEL_UP_DURATION_MS) return;
-
-    const progress = elapsed / LEVEL_UP_DURATION_MS;
-    const alpha = 1 - progress;
-    const scale = 1 + progress * 0.4;
-    const tierDef = HEAT_TIERS[this.levelUpTier];
-
+  private drawFloaters(): void {
+    if (this.floaters.length === 0) return;
+    const now = performance.now();
     const { ctx } = this;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.translate(GAME_WIDTH / 2, GAME_HEIGHT / 2);
-    ctx.scale(scale, scale);
 
-    ctx.shadowColor = tierDef.color;
-    ctx.shadowBlur = 24;
-    ctx.fillStyle = tierDef.color;
-    ctx.font = '800 56px system-ui, sans-serif';
-    ctx.fillText('LEVEL UP!', 0, -14);
+    for (let i = this.floaters.length - 1; i >= 0; i--) {
+      const f = this.floaters[i];
+      const duration = f.big ? FLOATER_MS_BIG : FLOATER_MS_SMALL;
+      const age = now - f.bornAt;
+      if (age >= duration) {
+        this.floaters.splice(i, 1);
+        continue;
+      }
+      const p = age / duration;
+      const alpha = 1 - p;
+      const rise = p * (f.big ? 60 : 40);
+      const baseSize = f.big ? 32 : 18;
+      const scale = f.big ? 1 + p * 0.35 : 1;
+      const shake = f.big ? (Math.sin(age * 0.05) * (1 - p) * 3) : 0;
+      const color = HEAT_TIERS[f.tier].color;
 
-    ctx.font = '700 28px system-ui, sans-serif';
-    ctx.fillText(`${tierDef.name}  ×${tierDef.mult}`, 0, 30);
-
-    ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = f.big ? 20 : 10;
+      ctx.fillStyle = color;
+      ctx.font = `${Math.round(baseSize * scale)}px system-ui, sans-serif`;
+      ctx.fillText(String(f.value), f.x + shake, f.y - rise);
+      ctx.restore();
+    }
   }
 
   private drawOverlay(): void {
