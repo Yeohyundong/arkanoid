@@ -1,12 +1,35 @@
-export type ItemType = 'M' | 'E' | 'F' | 'H';
+export type ItemType = 'M' | 'E' | 'F' | 'H' | 'S' | 'LH' | 'LV';
 
-export const ITEM_POOL: ItemType[] = ['M', 'E', 'F', 'H'];
+export const ITEM_POOL: ItemType[] = ['M', 'E', 'F', 'H', 'S', 'LH', 'LV'];
 
 export const ITEM_COLORS: Record<ItemType, string> = {
   M: '#2effa2',
   E: '#ffc94a',
   F: '#ff6a2e',
   H: '#ff3d5c',
+  S: '#4a8eff',
+  LH: '#c44dff',
+  LV: '#c44dff',
+};
+
+export const ITEM_LABELS: Record<ItemType, string> = {
+  M: 'M',
+  E: 'E',
+  F: 'F',
+  H: 'H',
+  S: 'S',
+  LH: '═',
+  LV: '║',
+};
+
+export const ITEM_NAMES: Record<ItemType, string> = {
+  M: 'Multi-Ball!',
+  E: 'Enlarge!',
+  F: 'Fireball!',
+  H: 'Heat Up!',
+  S: 'Shield Up!',
+  LH: 'Laser ═',
+  LV: 'Laser ║',
 };
 
 export const ITEM_FALL_SPEED = 220;
@@ -57,7 +80,7 @@ export class Item {
     ctx.font = '700 13px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(this.type, this.x, this.y + 1);
+    ctx.fillText(ITEM_LABELS[this.type], this.x, this.y + 1);
     ctx.restore();
   }
 }

@@ -16,8 +16,9 @@ import { SaveManager } from './SaveManager';
 import { MainMenu } from './MainMenu';
 import { HEAT_TIERS } from './Heat';
 import type { HeatTier } from './Heat';
-import { Item, ITEM_POOL } from './Item';
+import { Item, ITEM_POOL, ITEM_COLORS, ITEM_NAMES } from './Item';
 import type { ItemType } from './Item';
+import { AudioManager } from './Audio';
 
 export const GAME_WIDTH = 540;
 export const GAME_HEIGHT = 960;
@@ -32,13 +33,31 @@ const ITEM_BLOCK_SPAWN_INTERVAL_MS = 4000;
 const ITEM_BLOCK_LIFETIME_MS = 10000;
 const ENLARGE_DURATION_MS = 8000;
 const FIREBALL_DURATION_MS = 5000;
+const LASER_DURATION_MS = 4000;
+const LASER_FLASH_MS = 180;
 const HEAT_BOOST_STACKS = 15;
 const THRESHOLD_ROWS_ABOVE_PADDLE = 3;
 const ITEM_BLOCK_BODY_COLOR = '#1e1e2e';
 const ARCADE_STARTING_LIVES = 3;
+const ARCADE_MAX_LIVES = 5;
+const EXTRA_LIFE_STACK_STEP = 50;
+const LIFE_GAIN_PULSE_MS = 1000;
+const PAUSE_BUTTON_SIZE = 36;
+const PAUSE_BUTTON_PAD = 14;
+const PAUSE_MENU_BTN_W = 280;
+const PAUSE_MENU_BTN_H = 64;
 
-type GameState = 'menu' | 'playing' | 'cleared' | 'ending';
+type GameState = 'menu' | 'playing' | 'paused' | 'cleared' | 'ending';
 type GameMode = 'arcade' | 'wave';
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+type PauseAction = 'resume' | 'lobby';
 
 interface ComboFloater {
   x: number;
@@ -47,7 +66,44 @@ interface ComboFloater {
   tier: HeatTier;
   bornAt: number;
   big: boolean;
+  label?: string;
+  colorOverride?: string;
 }
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  bornAt: number;
+  size: number;
+}
+
+interface ShockRing {
+  x: number;
+  y: number;
+  bornAt: number;
+  color: string;
+  maxRadius: number;
+  lifetimeMs: number;
+}
+
+interface LaserFlash {
+  axis: 'h' | 'v';
+  pos: number;
+  bornAt: number;
+}
+
+const PARTICLE_LIFETIME_MS = 480;
+const PARTICLE_GRAVITY = 600;
+const SHOCK_RING_BASE_RADIUS = 26;
+const SHOCK_RING_BASE_LIFETIME_MS = 280;
+
+const MAX_PARTICLES = 240;
+const MAX_SHOCK_RINGS = 20;
+const MAX_FLOATERS = 40;
+const MAX_LASER_FLASHES = 10;
 
 export class Game {
   private readonly ctx: CanvasRenderingContext2D;
@@ -55,6 +111,10 @@ export class Game {
   private readonly input: InputHandler;
   private readonly save: SaveManager;
   private readonly menu: MainMenu;
+  private readonly audio: AudioManager;
+  private particles: Particle[] = [];
+  private shockRings: ShockRing[] = [];
+  private laserFlashes: LaserFlash[] = [];
   private balls: Ball[] = [];
   private bricks: Brick[] = [];
   private items: Item[] = [];
@@ -69,10 +129,13 @@ export class Game {
   private nextItemSpawnAt = 0;
   private stageIndex = 0;
   private arcadeLives = ARCADE_STARTING_LIVES;
+  private lifeGainedAt = 0;
   private waveNumber = 1;
   private nextWaveAt = 0;
   private thresholdY = 0;
   private lastRunNewBest = false;
+  private readonly pauseButtonRect: Rect;
+  private readonly pauseMenuButtons: { action: PauseAction; rect: Rect }[];
 
   constructor(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -87,11 +150,62 @@ export class Game {
     this.input = new InputHandler(canvas, GAME_WIDTH, GAME_HEIGHT);
     this.save = new SaveManager();
     this.menu = new MainMenu(GAME_WIDTH, GAME_HEIGHT);
+    this.audio = new AudioManager();
 
     this.thresholdY = this.paddle.top - THRESHOLD_ROWS_ABOVE_PADDLE * BRICK_HEIGHT;
+
+    this.pauseButtonRect = {
+      x: GAME_WIDTH - PAUSE_BUTTON_SIZE - PAUSE_BUTTON_PAD,
+      y: PAUSE_BUTTON_PAD,
+      w: PAUSE_BUTTON_SIZE,
+      h: PAUSE_BUTTON_SIZE,
+    };
+    const menuBtnX = (GAME_WIDTH - PAUSE_MENU_BTN_W) / 2;
+    this.pauseMenuButtons = [
+      {
+        action: 'resume',
+        rect: { x: menuBtnX, y: GAME_HEIGHT / 2 - 50, w: PAUSE_MENU_BTN_W, h: PAUSE_MENU_BTN_H },
+      },
+      {
+        action: 'lobby',
+        rect: { x: menuBtnX, y: GAME_HEIGHT / 2 + 40, w: PAUSE_MENU_BTN_W, h: PAUSE_MENU_BTN_H },
+      },
+    ];
+
     this.refreshMenu();
+    this.installPauseKey();
+    this.updateCursorVisibility();
 
     if (import.meta.env.DEV) this.installDebugKeys();
+  }
+
+  private setState(next: GameState): void {
+    this.state = next;
+    this.updateCursorVisibility();
+  }
+
+  private updateCursorVisibility(): void {
+    this.ctx.canvas.classList.toggle('show-cursor', this.state !== 'playing');
+  }
+
+  private installPauseKey(): void {
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.togglePause();
+    });
+  }
+
+  private togglePause(): void {
+    if (this.state === 'playing') this.setState('paused');
+    else if (this.state === 'paused') this.setState('playing');
+  }
+
+  private exitToLobby(): void {
+    this.refreshMenu();
+    this.setState('menu');
+  }
+
+  private pointInRect(x: number, y: number, r: Rect): boolean {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
 
   private installDebugKeys(): void {
@@ -140,12 +254,28 @@ export class Game {
       case 'playing':
         this.updatePlaying(dt);
         break;
+      case 'paused':
+        this.updatePaused();
+        break;
       case 'cleared':
         if (this.input.consumeTap()) this.advanceArcadeStage();
         break;
       case 'ending':
         if (this.input.consumeTap()) this.returnToMenu();
         break;
+    }
+  }
+
+  private updatePaused(): void {
+    if (!this.input.consumeTap()) return;
+    const x = this.input.getPointerX();
+    const y = this.input.getPointerY();
+    if (x === null || y === null) return;
+    for (const b of this.pauseMenuButtons) {
+      if (!this.pointInRect(x, y, b.rect)) continue;
+      if (b.action === 'resume') this.setState('playing');
+      else this.exitToLobby();
+      return;
     }
   }
 
@@ -167,7 +297,7 @@ export class Game {
     this.score = 0;
     this.arcadeLives = ARCADE_STARTING_LIVES;
     this.loadArcade(0);
-    this.state = 'playing';
+    this.setState('playing');
     this.refreshMenu();
   }
 
@@ -178,14 +308,14 @@ export class Game {
     this.score = cp.score;
     this.arcadeLives = cp.lives;
     this.loadArcade(cp.stageIndex);
-    this.state = 'playing';
+    this.setState('playing');
   }
 
   private startWaveNew(): void {
     this.mode = 'wave';
     this.score = 0;
     this.loadWave();
-    this.state = 'playing';
+    this.setState('playing');
   }
 
   private loadArcade(index: number): void {
@@ -219,6 +349,15 @@ export class Game {
   private updatePlaying(dt: number): void {
     const tapped = this.input.consumeTap();
 
+    if (tapped) {
+      const px = this.input.getPointerX();
+      const py = this.input.getPointerY();
+      if (px !== null && py !== null && this.pointInRect(px, py, this.pauseButtonRect)) {
+        this.setState('paused');
+        return;
+      }
+    }
+
     if (this.ballAttached && this.balls.length > 0) {
       const ball = this.balls[0];
       const attachOffset = (LAUNCH_ANGLE / MAX_REFLECT_ANGLE) * (this.paddle.width / 2);
@@ -249,6 +388,7 @@ export class Game {
         this.emitComboMilestones(ball, prevStack);
       }
       this.updateItems(subDt);
+      this.updateParticles(subDt);
       if (this.mode === 'arcade') this.checkArcadeClear();
       if (this.state !== 'playing') return;
     }
@@ -287,7 +427,7 @@ export class Game {
 
   private endWaveGame(): void {
     this.lastRunNewBest = this.save.submitWaveHighScore(this.score);
-    this.state = 'ending';
+    this.setState('ending');
   }
 
   private checkArcadeClear(): void {
@@ -298,19 +438,19 @@ export class Game {
       this.finalizeArcade();
     } else {
       this.save.saveArcadeCheckpoint(this.stageIndex + 1, this.score, this.arcadeLives);
-      this.state = 'cleared';
+      this.setState('cleared');
     }
   }
 
   private finalizeArcade(): void {
     this.lastRunNewBest = this.save.submitArcadeHighScore(this.score);
     this.save.clearArcadeCheckpoint();
-    this.state = 'ending';
+    this.setState('ending');
   }
 
   private advanceArcadeStage(): void {
     this.loadArcade(this.stageIndex + 1);
-    this.state = 'playing';
+    this.setState('playing');
   }
 
   private tickItemBlocks(): void {
@@ -365,10 +505,13 @@ export class Game {
     if (newStack <= prevStack) return;
     const now = performance.now();
     for (let s = prevStack + 1; s <= newStack; s++) {
+      if (s % EXTRA_LIFE_STACK_STEP === 0 && this.mode === 'arcade') {
+        this.checkExtraLife(s, ball);
+      }
       if (s % 5 !== 0) continue;
       const tierDef = HEAT_TIERS.find((t) => t.minStack === s);
       const big = !!tierDef;
-      this.floaters.push({
+      this.pushFloater({
         x: ball.x,
         y: ball.y,
         value: s,
@@ -379,10 +522,33 @@ export class Game {
     }
   }
 
+  private checkExtraLife(stack: number, ball: Ball): void {
+    const requiredTier = stack / EXTRA_LIFE_STACK_STEP;
+    if (this.arcadeLives >= ARCADE_MAX_LIVES) return;
+    if (this.arcadeLives >= requiredTier) return;
+    this.grantExtraLife(ball);
+  }
+
+  private grantExtraLife(ball: Ball): void {
+    this.arcadeLives = Math.min(ARCADE_MAX_LIVES, this.arcadeLives + 1);
+    this.lifeGainedAt = performance.now();
+    this.audio.itemPickup();
+    this.pushFloater({
+      x: ball.x,
+      y: ball.y,
+      value: 0,
+      tier: 3,
+      bornAt: performance.now(),
+      big: true,
+      label: '1UP!',
+    });
+  }
+
   private launchBall(): void {
     if (this.balls.length === 0) return;
     this.balls[0].setDirection(Math.sin(LAUNCH_ANGLE), -Math.cos(LAUNCH_ANGLE));
     this.ballAttached = false;
+    this.audio.launch();
   }
 
   private handlePaddleCollision(ball: Ball): void {
@@ -401,6 +567,11 @@ export class Game {
     ball.setDirection(Math.sin(angle), -Math.cos(angle));
 
     ball.accelerateOnBounce();
+    this.audio.paddleHit();
+
+    if (this.paddle.consumeMultiBallCharge()) {
+      this.burstFromBall(ball);
+    }
   }
 
   private handleBrickCollisions(ball: Ball): void {
@@ -413,7 +584,9 @@ export class Game {
       const dy = ball.y - cy;
       if (dx * dx + dy * dy > ball.radius * ball.radius) continue;
 
-      if (!ball.isFireball) {
+      const willPenetrate = ball.isFireball;
+
+      if (!willPenetrate) {
         const movingRight = ball.dirX > 0;
         const movingDown = ball.dirY > 0;
 
@@ -433,17 +606,203 @@ export class Game {
         }
       }
 
-      brick.damage();
-      ball.accelerateOnBounce();
+      const dmg = HEAT_TIERS[ball.getHeatTier()].damage;
+      brick.damage(dmg);
+      if (ball.isFireball) ball.accelerateWithoutStack();
+      else ball.accelerateOnBounce();
       this.awardBrickHitScore(ball);
 
-      if (brick.destroyed && brick.itemType) {
-        this.items.push(new Item(brick.x, brick.y, brick.itemType));
+      if (brick.destroyed) {
+        this.spawnDestroyParticles(brick, ball.getHeatTier());
+        this.spawnShockRing(brick, ball.getHeatTier());
+        this.audio.brickDestroy();
+        if (brick.itemType) {
+          this.items.push(new Item(brick.x, brick.y, brick.itemType));
+        }
+      } else {
+        this.audio.brickHit();
       }
 
-      if (ball.isFireball) continue;
+      if (ball.isLaserHorizontal) this.applyLaserLineDamage(brick, 'h', ball);
+      if (ball.isLaserVertical) this.applyLaserLineDamage(brick, 'v', ball);
+
+      if (willPenetrate) continue;
       return;
     }
+  }
+
+  private applyLaserLineDamage(originBrick: Brick, axis: 'h' | 'v', ball: Ball): void {
+    const heatMult = HEAT_TIERS[ball.getHeatTier()].mult;
+    const tolerance = BRICK_HEIGHT / 2;
+
+    if (this.laserFlashes.length >= MAX_LASER_FLASHES) this.laserFlashes.shift();
+    this.laserFlashes.push({
+      axis,
+      pos: axis === 'h' ? originBrick.y : originBrick.x,
+      bornAt: performance.now(),
+    });
+
+    for (const brick of this.bricks) {
+      if (brick.destroyed) continue;
+      if (brick === originBrick) continue;
+
+      const onLine = axis === 'h'
+        ? Math.abs(brick.y - originBrick.y) < tolerance
+        : Math.abs(brick.x - originBrick.x) < originBrick.width / 2;
+      if (!onLine) continue;
+
+      brick.damage(1);
+      this.score += Math.round(BRICK_SCORE * heatMult);
+
+      if (brick.destroyed) {
+        this.spawnDestroyParticles(brick, ball.getHeatTier());
+        this.spawnShockRing(brick, ball.getHeatTier());
+        if (brick.itemType) {
+          this.items.push(new Item(brick.x, brick.y, brick.itemType));
+        }
+      }
+    }
+  }
+
+  private spawnDestroyParticles(brick: Brick, tier: HeatTier): void {
+    if (this.particles.length >= MAX_PARTICLES) return;
+    const now = performance.now();
+    const count = Math.min(10 + tier * 2, MAX_PARTICLES - this.particles.length);
+    const speedMin = 130 + tier * 20;
+    const speedMax = 280 + tier * 40;
+    const sizeBoost = 1 + tier * 0.15;
+    const tierColor = HEAT_TIERS[tier].color;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.7;
+      const speed = speedMin + Math.random() * (speedMax - speedMin);
+      const useTierColor = tier > 0 && Math.random() < 0.4;
+      this.particles.push({
+        x: brick.x,
+        y: brick.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 60,
+        color: useTierColor ? tierColor : brick.color,
+        bornAt: now,
+        size: (4 + Math.random() * 3) * sizeBoost,
+      });
+    }
+  }
+
+  private spawnShockRing(brick: Brick, tier: HeatTier): void {
+    if (this.shockRings.length >= MAX_SHOCK_RINGS) {
+      this.shockRings.shift();
+    }
+    const tierColor = HEAT_TIERS[tier].color;
+    this.shockRings.push({
+      x: brick.x,
+      y: brick.y,
+      bornAt: performance.now(),
+      color: tier > 0 ? tierColor : brick.color,
+      maxRadius: SHOCK_RING_BASE_RADIUS + tier * 14,
+      lifetimeMs: SHOCK_RING_BASE_LIFETIME_MS + tier * 40,
+    });
+  }
+
+  private updateParticles(dt: number): void {
+    const now = performance.now();
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      if (now - p.bornAt > PARTICLE_LIFETIME_MS) {
+        this.particles.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += PARTICLE_GRAVITY * dt;
+    }
+    for (let i = this.shockRings.length - 1; i >= 0; i--) {
+      if (now - this.shockRings[i].bornAt > this.shockRings[i].lifetimeMs) {
+        this.shockRings.splice(i, 1);
+      }
+    }
+    for (let i = this.laserFlashes.length - 1; i >= 0; i--) {
+      if (now - this.laserFlashes[i].bornAt > LASER_FLASH_MS) {
+        this.laserFlashes.splice(i, 1);
+      }
+    }
+  }
+
+  private drawParticles(): void {
+    if (this.particles.length === 0) return;
+    const now = performance.now();
+    const { ctx } = this;
+    ctx.save();
+    for (const p of this.particles) {
+      const t = (now - p.bornAt) / PARTICLE_LIFETIME_MS;
+      if (t >= 1) continue;
+      const alpha = 1 - t;
+      const size = p.size * (1 - t * 0.55);
+      ctx.globalAlpha = alpha;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+    }
+    ctx.restore();
+  }
+
+  private drawLaserFlashes(): void {
+    if (this.laserFlashes.length === 0) return;
+    const now = performance.now();
+    const { ctx } = this;
+    ctx.save();
+    for (const f of this.laserFlashes) {
+      const t = (now - f.bornAt) / LASER_FLASH_MS;
+      if (t >= 1) continue;
+      const alpha = 1 - t;
+      const thickness = 10 * (1 - t * 0.4);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#c44dff';
+      ctx.shadowColor = '#c44dff';
+      ctx.shadowBlur = 22;
+      if (f.axis === 'h') {
+        ctx.fillRect(0, f.pos - thickness / 2, GAME_WIDTH, thickness);
+      } else {
+        ctx.fillRect(f.pos - thickness / 2, 0, thickness, GAME_HEIGHT);
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawShieldIndicator(): void {
+    const { ctx } = this;
+    const color = '#4a8eff';
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.006);
+    const y = GAME_HEIGHT - 3;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = color;
+    ctx.fillRect(0, y - 2, GAME_WIDTH, 3);
+    ctx.restore();
+  }
+
+  private drawShockRings(): void {
+    if (this.shockRings.length === 0) return;
+    const now = performance.now();
+    const { ctx } = this;
+    ctx.save();
+    for (const r of this.shockRings) {
+      const t = (now - r.bornAt) / r.lifetimeMs;
+      if (t >= 1) continue;
+      const radius = r.maxRadius * (0.2 + t * 0.8);
+      const alpha = (1 - t) * 0.7;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 2.5 * (1 - t);
+      ctx.shadowColor = r.color;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private awardBrickHitScore(ball: Ball): void {
@@ -456,7 +815,9 @@ export class Game {
       const item = this.items[i];
       item.update(dt);
       if (this.itemHitsPaddle(item)) {
+        this.spawnItemPickupFloater(item);
         this.applyItemEffect(item.type);
+        this.audio.itemPickup();
         this.items.splice(i, 1);
         continue;
       }
@@ -468,6 +829,24 @@ export class Game {
         item.vy = Math.abs(item.vy);
       }
     }
+  }
+
+  private spawnItemPickupFloater(item: Item): void {
+    this.pushFloater({
+      x: item.x,
+      y: this.paddle.top - 14,
+      value: 0,
+      tier: 0,
+      bornAt: performance.now(),
+      big: true,
+      label: ITEM_NAMES[item.type],
+      colorOverride: ITEM_COLORS[item.type],
+    });
+  }
+
+  private pushFloater(f: ComboFloater): void {
+    if (this.floaters.length >= MAX_FLOATERS) this.floaters.shift();
+    this.floaters.push(f);
   }
 
   private itemHitsPaddle(item: Item): boolean {
@@ -482,10 +861,13 @@ export class Game {
 
   private applyItemEffect(type: ItemType): void {
     switch (type) {
-      case 'M': this.spawnMultiBall(); break;
+      case 'M': this.paddle.chargeMultiBall(); break;
       case 'E': this.paddle.enlarge(ENLARGE_DURATION_MS); break;
       case 'F': for (const b of this.balls) b.grantFireball(FIREBALL_DURATION_MS); break;
       case 'H': this.heatBoost(); break;
+      case 'S': this.paddle.chargeShield(); break;
+      case 'LH': for (const b of this.balls) b.grantLaserHorizontal(LASER_DURATION_MS); break;
+      case 'LV': for (const b of this.balls) b.grantLaserVertical(LASER_DURATION_MS); break;
     }
   }
 
@@ -497,16 +879,14 @@ export class Game {
     }
   }
 
-  private spawnMultiBall(): void {
-    if (this.balls.length === 0 || this.ballAttached) return;
-    const primary = this.balls[0];
-    const baseAngle = Math.atan2(primary.dirX, -primary.dirY);
+  private burstFromBall(source: Ball): void {
+    const baseAngle = Math.atan2(source.dirX, -source.dirY);
     for (const delta of [MULTIBALL_ANGLE_OFFSET, -MULTIBALL_ANGLE_OFFSET]) {
-      const newBall = new Ball(primary.x, primary.y, primary.baseSpeed);
+      const newBall = new Ball(source.x, source.y, source.baseSpeed);
       const angle = baseAngle + delta;
       newBall.setDirection(Math.sin(angle), -Math.cos(angle));
-      newBall.speed = primary.speed;
-      newBall.stack = primary.stack;
+      newBall.speed = source.speed;
+      newBall.stack = source.stack;
       this.balls.push(newBall);
     }
   }
@@ -514,9 +894,13 @@ export class Game {
   private handleBottomOut(): void {
     for (let i = this.balls.length - 1; i >= 0; i--) {
       const ball = this.balls[i];
-      if (ball.y - ball.radius > GAME_HEIGHT) {
-        this.balls.splice(i, 1);
+      if (ball.y - ball.radius <= GAME_HEIGHT) continue;
+
+      if (this.paddle.consumeShield()) {
+        this.triggerShieldRescue(ball);
+        continue;
       }
+      this.balls.splice(i, 1);
     }
     if (this.balls.length > 0) return;
 
@@ -527,13 +911,28 @@ export class Game {
         return;
       }
     }
+    this.paddle.resetEffects();
     this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
     this.ballAttached = true;
   }
 
+  private triggerShieldRescue(ball: Ball): void {
+    ball.y = GAME_HEIGHT - ball.radius - 4;
+    ball.dirY = -Math.abs(ball.dirY);
+    this.shockRings.push({
+      x: ball.x,
+      y: GAME_HEIGHT - 2,
+      bornAt: performance.now(),
+      color: '#4a8eff',
+      maxRadius: 80,
+      lifetimeMs: 360,
+    });
+    this.audio.itemPickup();
+  }
+
   private returnToMenu(): void {
     this.refreshMenu();
-    this.state = 'menu';
+    this.setState('menu');
   }
 
   private draw(): void {
@@ -548,14 +947,63 @@ export class Game {
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
     if (this.mode === 'wave') this.drawThresholdLine();
+    if (this.paddle.hasShield) this.drawShieldIndicator();
     for (const brick of this.bricks) brick.draw(ctx);
+    this.drawParticles();
+    this.drawShockRings();
+    this.drawLaserFlashes();
     for (const item of this.items) item.draw(ctx);
     this.paddle.draw(ctx);
     for (const ball of this.balls) ball.draw(ctx);
     this.drawFloaters();
+    if (this.ballAttached && this.state === 'playing') this.drawLaunchHint();
     this.drawHud();
 
-    if (this.state !== 'playing') this.drawOverlay();
+    if (this.state === 'paused') this.drawPauseOverlay();
+    else if (this.state !== 'playing') this.drawOverlay();
+  }
+
+  private drawPauseOverlay(): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '800 48px system-ui, sans-serif';
+    ctx.fillText('PAUSED', GAME_WIDTH / 2, GAME_HEIGHT / 2 - 140);
+
+    for (const b of this.pauseMenuButtons) this.drawPauseMenuButton(b);
+
+    const lobbyRect = this.pauseMenuButtons[1].rect;
+    ctx.fillStyle = '#8a8ab0';
+    ctx.font = '500 13px system-ui, sans-serif';
+    const noticeY = lobbyRect.y + lobbyRect.h + 22;
+    ctx.fillText('클리어한 스테이지는 저장돼요.', GAME_WIDTH / 2, noticeY);
+    ctx.fillText('진행 중인 플레이는 저장되지 않아요.', GAME_WIDTH / 2, noticeY + 20);
+    ctx.restore();
+  }
+
+  private drawPauseMenuButton(b: { action: PauseAction; rect: Rect }): void {
+    const { ctx } = this;
+    const accent = b.action === 'resume' ? '#2effa2' : '#ff8a8a';
+    const cx = b.rect.x + b.rect.w / 2;
+    const cy = b.rect.y + b.rect.h / 2;
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 16;
+    ctx.strokeRect(b.rect.x, b.rect.y, b.rect.w, b.rect.h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = accent;
+    ctx.font = '700 24px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.action === 'resume' ? '재개하기' : '로비로 나가기', cx, cy);
+    ctx.restore();
   }
 
   private drawThresholdLine(): void {
@@ -597,27 +1045,116 @@ export class Game {
     ctx.textAlign = 'right';
     ctx.fillStyle = this.score > savedBest ? '#2effa2' : '#8a8ab0';
     const bestDisplay = Math.max(savedBest, this.score);
-    ctx.fillText(`BEST ${bestDisplay}`, GAME_WIDTH - 20, 20);
+    ctx.fillText(`BEST ${bestDisplay}`, GAME_WIDTH - PAUSE_BUTTON_SIZE - PAUSE_BUTTON_PAD - 12, 20);
 
+    ctx.restore();
+
+    this.drawPauseButton();
+  }
+
+  private drawPauseButton(): void {
+    const { ctx } = this;
+    const r = this.pauseButtonRect;
+    ctx.save();
+    ctx.strokeStyle = '#8a8ab0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = '#e6e6ff';
+    const barW = 4;
+    const barH = r.h * 0.5;
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    ctx.fillRect(cx - 7, cy - barH / 2, barW, barH);
+    ctx.fillRect(cx + 3, cy - barH / 2, barW, barH);
+    ctx.restore();
+  }
+
+  private drawLaunchHint(): void {
+    if (this.balls.length === 0) return;
+    const ball = this.balls[0];
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.005);
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#e6e6ff';
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 6;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 16px system-ui, sans-serif';
+    ctx.fillText('TAP TO LAUNCH', ball.x, ball.y - 34);
     ctx.restore();
   }
 
   private drawLifeIcons(): void {
     const { ctx } = this;
     const iconRadius = 6;
-    const gap = 6;
+    const gap = 8;
     const y = 54;
+    const now = performance.now();
+    const gainAge = now - this.lifeGainedAt;
+    const gainPulse = gainAge < LIFE_GAIN_PULSE_MS
+      ? 1 - gainAge / LIFE_GAIN_PULSE_MS
+      : 0;
+    const justGainedIdx = gainPulse > 0 ? this.arcadeLives - 1 : -1;
+
     ctx.save();
-    ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 6;
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < this.arcadeLives; i++) {
+    for (let i = 0; i < ARCADE_MAX_LIVES; i++) {
       const cx = 20 + iconRadius + i * (iconRadius * 2 + gap);
-      ctx.beginPath();
-      ctx.arc(cx, y, iconRadius, 0, Math.PI * 2);
-      ctx.fill();
+      const filled = i < this.arcadeLives;
+
+      if (filled) {
+        const pulse = i === justGainedIdx ? gainPulse : 0;
+        ctx.shadowColor = '#ffffff';
+        ctx.shadowBlur = 6 + pulse * 14;
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(cx, y, iconRadius + pulse * 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#3a3a4a';
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(cx, y, iconRadius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    if (this.arcadeLives < ARCADE_MAX_LIVES) {
+      const nextIdx = this.arcadeLives;
+      const requiredStack = (nextIdx + 1) * EXTRA_LIFE_STACK_STEP;
+      const prevReq = nextIdx * EXTRA_LIFE_STACK_STEP;
+      const currentStack = this.getMaxBallStack();
+      const progress = Math.max(0, Math.min(1, (currentStack - prevReq) / (requiredStack - prevReq)));
+      const cx = 20 + iconRadius + nextIdx * (iconRadius * 2 + gap);
+
+      if (progress > 0) {
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = HEAT_TIERS[3].color;
+        ctx.beginPath();
+        ctx.arc(cx, y, (iconRadius - 1) * progress, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = currentStack >= prevReq ? '#e6e6ff' : '#8a8ab0';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.font = '600 10px system-ui, sans-serif';
+      ctx.fillText(`${Math.min(currentStack, requiredStack)}/${requiredStack}`, cx, y + iconRadius + 4);
     }
     ctx.restore();
+  }
+
+  private getMaxBallStack(): number {
+    let max = 0;
+    for (const b of this.balls) if (b.stack > max) max = b.stack;
+    return max;
   }
 
   private drawFloaters(): void {
@@ -639,7 +1176,7 @@ export class Game {
       const baseSize = f.big ? 32 : 18;
       const scale = f.big ? 1 + p * 0.35 : 1;
       const shake = f.big ? (Math.sin(age * 0.05) * (1 - p) * 3) : 0;
-      const color = HEAT_TIERS[f.tier].color;
+      const color = f.colorOverride ?? HEAT_TIERS[f.tier].color;
 
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -649,7 +1186,8 @@ export class Game {
       ctx.shadowBlur = f.big ? 20 : 10;
       ctx.fillStyle = color;
       ctx.font = `${Math.round(baseSize * scale)}px system-ui, sans-serif`;
-      ctx.fillText(String(f.value), f.x + shake, f.y - rise);
+      const text = f.label ?? String(f.value);
+      ctx.fillText(text, f.x + shake, f.y - rise);
       ctx.restore();
     }
   }

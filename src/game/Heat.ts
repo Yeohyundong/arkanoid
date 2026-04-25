@@ -5,13 +5,14 @@ export interface HeatTierDef {
   color: string;
   mult: number;
   minStack: number;
+  damage: number;
 }
 
 export const HEAT_TIERS: readonly HeatTierDef[] = [
-  { name: 'COOL', color: '#2eeaff', mult: 1, minStack: 0 },
-  { name: 'WARM', color: '#ffaa2e', mult: 2, minStack: 5 },
-  { name: 'HOT', color: '#ff3d5c', mult: 3, minStack: 15 },
-  { name: 'BLAZE', color: '#fff1a8', mult: 5, minStack: 30 },
+  { name: 'COOL',  color: '#2eeaff', mult: 1, minStack: 0,  damage: 1 },
+  { name: 'WARM',  color: '#ffd84a', mult: 2, minStack: 5,  damage: 1 },
+  { name: 'HOT',   color: '#ff7a2e', mult: 3, minStack: 15, damage: 2 },
+  { name: 'BLAZE', color: '#ff2e4a', mult: 5, minStack: 30, damage: 3 },
 ];
 
 export function stackToTier(stack: number): HeatTier {

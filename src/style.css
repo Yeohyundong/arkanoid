@@ -28,4 +28,9 @@ html, body {
   width: min(100vw, calc(100vh * 9 / 16));
   box-shadow: 0 0 40px rgba(0, 234, 255, 0.15);
   touch-action: none;
+  cursor: none;
+}
+
+#game-canvas.show-cursor {
+  cursor: default;
 }

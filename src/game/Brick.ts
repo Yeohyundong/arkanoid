@@ -1,5 +1,5 @@
 import type { ItemType } from './Item';
-import { ITEM_COLORS } from './Item';
+import { ITEM_COLORS, ITEM_LABELS } from './Item';
 
 export class Brick {
   readonly x: number;
@@ -26,8 +26,8 @@ export class Brick {
     return this.hp <= 0;
   }
 
-  damage(): void {
-    if (this.hp > 0) this.hp -= 1;
+  damage(amount = 1): void {
+    if (this.hp > 0) this.hp = Math.max(0, this.hp - amount);
   }
 
   get left(): number {
@@ -82,7 +82,7 @@ export class Brick {
       ctx.font = '700 14px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(this.itemType, this.x, this.y + 1);
+      ctx.fillText(ITEM_LABELS[this.itemType], this.x, this.y + 1);
       ctx.restore();
     } else {
       ctx.save();

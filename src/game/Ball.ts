@@ -14,6 +14,8 @@ export class Ball {
   baseSpeed: number;
   stack = 0;
   fireballUntil = 0;
+  laserHorizontalUntil = 0;
+  laserVerticalUntil = 0;
   readonly radius = 10;
   private fireTrail: { x: number; y: number; bornAt: number }[] = [];
 
@@ -61,6 +63,10 @@ export class Ball {
     this.stack += 1;
   }
 
+  accelerateWithoutStack(): void {
+    this.speed = Math.min(this.speed + BALL_SPEED_STEP, BALL_MAX_SPEED);
+  }
+
   addHeatStacks(n: number): void {
     this.stack += n;
     this.speed = Math.min(this.speed + BALL_SPEED_STEP * n, BALL_MAX_SPEED);
@@ -74,6 +80,26 @@ export class Ball {
 
   get isFireball(): boolean {
     return performance.now() < this.fireballUntil;
+  }
+
+  grantLaserHorizontal(durationMs: number): void {
+    const now = performance.now();
+    const remaining = Math.max(0, this.laserHorizontalUntil - now);
+    this.laserHorizontalUntil = now + durationMs + remaining;
+  }
+
+  grantLaserVertical(durationMs: number): void {
+    const now = performance.now();
+    const remaining = Math.max(0, this.laserVerticalUntil - now);
+    this.laserVerticalUntil = now + durationMs + remaining;
+  }
+
+  get isLaserHorizontal(): boolean {
+    return performance.now() < this.laserHorizontalUntil;
+  }
+
+  get isLaserVertical(): boolean {
+    return performance.now() < this.laserVerticalUntil;
   }
 
   resetSpeed(): void {
@@ -132,6 +158,7 @@ export class Ball {
 
   draw(ctx: CanvasRenderingContext2D): void {
     if (this.fireTrail.length > 0) this.drawFireTrail(ctx);
+    if (this.isLaserHorizontal || this.isLaserVertical) this.drawLaserBeacon(ctx);
 
     const tier = this.getHeatTier();
     const tierColor = HEAT_TIERS[tier].color;
@@ -152,6 +179,28 @@ export class Ball {
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  private drawLaserBeacon(ctx: CanvasRenderingContext2D): void {
+    const now = performance.now();
+    const color = '#c44dff';
+    const pulse = 0.55 + 0.45 * Math.sin(now * 0.012);
+    const len = 16;
+    const thick = 3;
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = pulse;
+    if (this.isLaserHorizontal) {
+      ctx.fillRect(this.x - this.radius - len, this.y - thick / 2, len, thick);
+      ctx.fillRect(this.x + this.radius, this.y - thick / 2, len, thick);
+    }
+    if (this.isLaserVertical) {
+      ctx.fillRect(this.x - thick / 2, this.y - this.radius - len, thick, len);
+      ctx.fillRect(this.x - thick / 2, this.y + this.radius, thick, len);
+    }
     ctx.restore();
   }
 

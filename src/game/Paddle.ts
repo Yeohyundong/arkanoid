@@ -8,6 +8,8 @@ export class Paddle {
   readonly y: number;
   readonly height = 16;
   private enlargeExpiries: number[] = [];
+  private multiBallReady = false;
+  private shieldReady = false;
 
   constructor(worldW: number, worldH: number) {
     this.x = worldW / 2;
@@ -27,6 +29,36 @@ export class Paddle {
 
   resetEffects(): void {
     this.enlargeExpiries = [];
+    this.multiBallReady = false;
+    this.shieldReady = false;
+  }
+
+  chargeShield(): void {
+    this.shieldReady = true;
+  }
+
+  consumeShield(): boolean {
+    if (!this.shieldReady) return false;
+    this.shieldReady = false;
+    return true;
+  }
+
+  get hasShield(): boolean {
+    return this.shieldReady;
+  }
+
+  chargeMultiBall(): void {
+    this.multiBallReady = true;
+  }
+
+  consumeMultiBallCharge(): boolean {
+    if (!this.multiBallReady) return false;
+    this.multiBallReady = false;
+    return true;
+  }
+
+  get hasMultiBallCharge(): boolean {
+    return this.multiBallReady;
   }
 
   enlarge(durationMs: number): void {
@@ -80,6 +112,8 @@ export class Paddle {
     ctx.fillRect(this.left, this.top, w, this.height);
     ctx.restore();
 
+    if (this.multiBallReady) this.drawMultiBallIndicator(ctx);
+
     const warning = this.getWarningInfo();
     if (!warning) return;
 
@@ -92,6 +126,25 @@ export class Paddle {
     ctx.globalAlpha = blink * 0.75;
     ctx.fillRect(this.left, this.top, zoneW, this.height);
     ctx.fillRect(this.right - zoneW, this.top, zoneW, this.height);
+    ctx.restore();
+  }
+
+  private drawMultiBallIndicator(ctx: CanvasRenderingContext2D): void {
+    const color = '#2effa2';
+    const r = 3.5;
+    const gap = 6;
+    const y = this.top - 8;
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.008);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    for (const dx of [-gap, 0, gap]) {
+      ctx.beginPath();
+      ctx.arc(this.x + dx, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 
