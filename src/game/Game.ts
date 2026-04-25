@@ -17,6 +17,7 @@ import { MainMenu } from './MainMenu';
 import { HEAT_TIERS } from './Heat';
 import type { HeatTier } from './Heat';
 import { Item, ITEM_POOL, ITEM_COLORS, ITEM_NAMES } from './Item';
+import { balance } from './Balance';
 import type { ItemType } from './Item';
 import { AudioManager } from './Audio';
 
@@ -25,29 +26,19 @@ export const GAME_HEIGHT = 960;
 
 const MAX_REFLECT_ANGLE = Math.PI / 3;
 const LAUNCH_ANGLE = Math.PI / 6;
-const BRICK_SCORE = 10;
 const FLOATER_MS_SMALL = 700;
 const FLOATER_MS_BIG = 1000;
 const MULTIBALL_ANGLE_OFFSET = Math.PI / 6;
-const ITEM_BLOCK_SPAWN_INTERVAL_MS = 4000;
-const ITEM_BLOCK_LIFETIME_MS = 10000;
-const ENLARGE_DURATION_MS = 8000;
-const FIREBALL_DURATION_MS = 5000;
-const LASER_DURATION_MS = 4000;
 const LASER_FLASH_MS = 180;
-const HEAT_BOOST_STACKS = 15;
 const THRESHOLD_ROWS_ABOVE_PADDLE = 3;
 const ITEM_BLOCK_BODY_COLOR = '#1e1e2e';
-const ARCADE_STARTING_LIVES = 3;
-const ARCADE_MAX_LIVES = 5;
-const EXTRA_LIFE_STACK_STEP = 50;
 const LIFE_GAIN_PULSE_MS = 1000;
 const PAUSE_BUTTON_SIZE = 36;
 const PAUSE_BUTTON_PAD = 14;
 const PAUSE_MENU_BTN_W = 280;
 const PAUSE_MENU_BTN_H = 64;
 
-type GameState = 'menu' | 'playing' | 'paused' | 'cleared' | 'ending';
+export type GameState = 'menu' | 'playing' | 'paused' | 'cleared' | 'ending';
 type GameMode = 'arcade' | 'wave';
 
 interface Rect {
@@ -128,12 +119,13 @@ export class Game {
   private floaters: ComboFloater[] = [];
   private nextItemSpawnAt = 0;
   private stageIndex = 0;
-  private arcadeLives = ARCADE_STARTING_LIVES;
+  private arcadeLives = balance.arcadeStartingLives;
   private lifeGainedAt = 0;
   private waveNumber = 1;
   private nextWaveAt = 0;
   private thresholdY = 0;
   private lastRunNewBest = false;
+  private lastRunVictory = false;
   private readonly pauseButtonRect: Rect;
   private readonly pauseMenuButtons: { action: PauseAction; rect: Rect }[];
 
@@ -179,9 +171,17 @@ export class Game {
     if (import.meta.env.DEV) this.installDebugKeys();
   }
 
+  private readonly stateListeners: ((state: GameState) => void)[] = [];
+
+  onStateChange(listener: (state: GameState) => void): void {
+    this.stateListeners.push(listener);
+    listener(this.state);
+  }
+
   private setState(next: GameState): void {
     this.state = next;
     this.updateCursorVisibility();
+    for (const l of this.stateListeners) l(next);
   }
 
   private updateCursorVisibility(): void {
@@ -295,7 +295,7 @@ export class Game {
     this.save.clearArcadeCheckpoint();
     this.mode = 'arcade';
     this.score = 0;
-    this.arcadeLives = ARCADE_STARTING_LIVES;
+    this.arcadeLives = balance.arcadeStartingLives;
     this.loadArcade(0);
     this.setState('playing');
     this.refreshMenu();
@@ -328,7 +328,7 @@ export class Game {
     this.ballAttached = true;
     this.floaters = [];
     this.paddle.resetEffects();
-    this.nextItemSpawnAt = performance.now() + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+    this.nextItemSpawnAt = performance.now() + balance.itemSpawnIntervalMs;
   }
 
   private loadWave(): void {
@@ -342,7 +342,7 @@ export class Game {
     this.paddle.resetEffects();
     this.waveNumber = 1;
     const now = performance.now();
-    this.nextItemSpawnAt = now + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+    this.nextItemSpawnAt = now + balance.itemSpawnIntervalMs;
     this.nextWaveAt = now + getWaveIntervalMs(this.waveNumber);
   }
 
@@ -427,6 +427,7 @@ export class Game {
 
   private endWaveGame(): void {
     this.lastRunNewBest = this.save.submitWaveHighScore(this.score);
+    this.lastRunVictory = false;
     this.setState('ending');
   }
 
@@ -435,16 +436,17 @@ export class Game {
 
     const isFinal = this.stageIndex + 1 >= ARCADE_STAGE_COUNT;
     if (isFinal) {
-      this.finalizeArcade();
+      this.finalizeArcade(true);
     } else {
       this.save.saveArcadeCheckpoint(this.stageIndex + 1, this.score, this.arcadeLives);
       this.setState('cleared');
     }
   }
 
-  private finalizeArcade(): void {
+  private finalizeArcade(victory: boolean): void {
     this.lastRunNewBest = this.save.submitArcadeHighScore(this.score);
     this.save.clearArcadeCheckpoint();
+    this.lastRunVictory = victory;
     this.setState('ending');
   }
 
@@ -459,13 +461,13 @@ export class Game {
     for (let i = this.bricks.length - 1; i >= 0; i--) {
       const brick = this.bricks[i];
       if (!brick.itemType || brick.destroyed) continue;
-      if (now - brick.itemSpawnedAt >= ITEM_BLOCK_LIFETIME_MS) {
+      if (now - brick.itemSpawnedAt >= balance.itemBlockLifetimeMs) {
         this.bricks.splice(i, 1);
       }
     }
 
     if (now < this.nextItemSpawnAt) return;
-    this.nextItemSpawnAt = now + ITEM_BLOCK_SPAWN_INTERVAL_MS;
+    this.nextItemSpawnAt = now + balance.itemSpawnIntervalMs;
 
     if (this.ballAttached) return;
 
@@ -505,7 +507,7 @@ export class Game {
     if (newStack <= prevStack) return;
     const now = performance.now();
     for (let s = prevStack + 1; s <= newStack; s++) {
-      if (s % EXTRA_LIFE_STACK_STEP === 0 && this.mode === 'arcade') {
+      if (s % balance.extraLifeStackStep === 0 && this.mode === 'arcade') {
         this.checkExtraLife(s, ball);
       }
       if (s % 5 !== 0) continue;
@@ -523,14 +525,14 @@ export class Game {
   }
 
   private checkExtraLife(stack: number, ball: Ball): void {
-    const requiredTier = stack / EXTRA_LIFE_STACK_STEP;
-    if (this.arcadeLives >= ARCADE_MAX_LIVES) return;
+    const requiredTier = stack / balance.extraLifeStackStep;
+    if (this.arcadeLives >= balance.arcadeMaxLives) return;
     if (this.arcadeLives >= requiredTier) return;
     this.grantExtraLife(ball);
   }
 
   private grantExtraLife(ball: Ball): void {
-    this.arcadeLives = Math.min(ARCADE_MAX_LIVES, this.arcadeLives + 1);
+    this.arcadeLives = Math.min(balance.arcadeMaxLives, this.arcadeLives + 1);
     this.lifeGainedAt = performance.now();
     this.audio.itemPickup();
     this.pushFloater({
@@ -652,7 +654,7 @@ export class Game {
       if (!onLine) continue;
 
       brick.damage(1);
-      this.score += Math.round(BRICK_SCORE * heatMult);
+      this.score += Math.round(balance.brickScore * heatMult);
 
       if (brick.destroyed) {
         this.spawnDestroyParticles(brick, ball.getHeatTier());
@@ -773,7 +775,7 @@ export class Game {
     const { ctx } = this;
     const color = '#4a8eff';
     const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.006);
-    const y = GAME_HEIGHT - 3;
+    const y = GAME_HEIGHT - 24;
     ctx.save();
     ctx.globalAlpha = pulse;
     ctx.shadowColor = color;
@@ -807,7 +809,7 @@ export class Game {
 
   private awardBrickHitScore(ball: Ball): void {
     const heatMult = HEAT_TIERS[ball.getHeatTier()].mult;
-    this.score += Math.round(BRICK_SCORE * heatMult);
+    this.score += Math.round(balance.brickScore * heatMult);
   }
 
   private updateItems(dt: number): void {
@@ -862,19 +864,19 @@ export class Game {
   private applyItemEffect(type: ItemType): void {
     switch (type) {
       case 'M': this.paddle.chargeMultiBall(); break;
-      case 'E': this.paddle.enlarge(ENLARGE_DURATION_MS); break;
-      case 'F': for (const b of this.balls) b.grantFireball(FIREBALL_DURATION_MS); break;
+      case 'E': this.paddle.enlarge(balance.enlargeDurationMs); break;
+      case 'F': for (const b of this.balls) b.grantFireball(balance.fireballDurationMs); break;
       case 'H': this.heatBoost(); break;
       case 'S': this.paddle.chargeShield(); break;
-      case 'LH': for (const b of this.balls) b.grantLaserHorizontal(LASER_DURATION_MS); break;
-      case 'LV': for (const b of this.balls) b.grantLaserVertical(LASER_DURATION_MS); break;
+      case 'LH': for (const b of this.balls) b.grantLaserHorizontal(balance.laserDurationMs); break;
+      case 'LV': for (const b of this.balls) b.grantLaserVertical(balance.laserDurationMs); break;
     }
   }
 
   private heatBoost(): void {
     for (const ball of this.balls) {
       const prev = ball.stack;
-      ball.addHeatStacks(HEAT_BOOST_STACKS);
+      ball.addHeatStacks(balance.heatBoostStacks);
       this.emitComboMilestones(ball, prev);
     }
   }
@@ -907,7 +909,7 @@ export class Game {
     if (this.mode === 'arcade') {
       this.arcadeLives -= 1;
       if (this.arcadeLives <= 0) {
-        this.finalizeArcade();
+        this.finalizeArcade(false);
         return;
       }
     }
@@ -981,8 +983,8 @@ export class Game {
     ctx.fillStyle = '#8a8ab0';
     ctx.font = '500 13px system-ui, sans-serif';
     const noticeY = lobbyRect.y + lobbyRect.h + 22;
-    ctx.fillText('클리어한 스테이지는 저장돼요.', GAME_WIDTH / 2, noticeY);
-    ctx.fillText('진행 중인 플레이는 저장되지 않아요.', GAME_WIDTH / 2, noticeY + 20);
+    ctx.fillText('Cleared stages are saved.', GAME_WIDTH / 2, noticeY);
+    ctx.fillText('Your current run will not be saved.', GAME_WIDTH / 2, noticeY + 20);
     ctx.restore();
   }
 
@@ -1002,7 +1004,7 @@ export class Game {
     ctx.font = '700 24px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(b.action === 'resume' ? '재개하기' : '로비로 나가기', cx, cy);
+    ctx.fillText(b.action === 'resume' ? 'RESUME' : 'EXIT TO MENU', cx, cy);
     ctx.restore();
   }
 
@@ -1099,7 +1101,7 @@ export class Game {
     const justGainedIdx = gainPulse > 0 ? this.arcadeLives - 1 : -1;
 
     ctx.save();
-    for (let i = 0; i < ARCADE_MAX_LIVES; i++) {
+    for (let i = 0; i < balance.arcadeMaxLives; i++) {
       const cx = 20 + iconRadius + i * (iconRadius * 2 + gap);
       const filled = i < this.arcadeLives;
 
@@ -1123,10 +1125,10 @@ export class Game {
       }
     }
 
-    if (this.arcadeLives < ARCADE_MAX_LIVES) {
+    if (this.arcadeLives < balance.arcadeMaxLives) {
       const nextIdx = this.arcadeLives;
-      const requiredStack = (nextIdx + 1) * EXTRA_LIFE_STACK_STEP;
-      const prevReq = nextIdx * EXTRA_LIFE_STACK_STEP;
+      const requiredStack = (nextIdx + 1) * balance.extraLifeStackStep;
+      const prevReq = nextIdx * balance.extraLifeStackStep;
       const currentStack = this.getMaxBallStack();
       const progress = Math.max(0, Math.min(1, (currentStack - prevReq) / (requiredStack - prevReq)));
       const cx = 20 + iconRadius + nextIdx * (iconRadius * 2 + gap);
@@ -1210,8 +1212,8 @@ export class Game {
       ctx.fillText('Tap to continue', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40);
     } else {
       // 'ending'
-      const title = this.mode === 'wave' ? 'GAME OVER' : 'YOU WIN';
-      const titleColor = this.mode === 'wave' ? '#ff3d5c' : '#2effa2';
+      const title = this.lastRunVictory ? 'FULL HEAT' : 'COOL DOWN';
+      const titleColor = this.lastRunVictory ? '#2effa2' : '#ff3d5c';
 
       ctx.fillStyle = titleColor;
       ctx.textAlign = 'center';

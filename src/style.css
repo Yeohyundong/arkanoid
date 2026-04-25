@@ -19,6 +19,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 24px;
+  padding: 16px;
 }
 
 #game-canvas {
@@ -33,4 +35,213 @@ html, body {
 
 #game-canvas.show-cursor {
   cursor: default;
+}
+
+.balance-dashboard {
+  width: 280px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #12121a;
+  border: 1px solid #2a2a3a;
+  border-radius: 8px;
+  padding: 16px;
+  color: #e0e0ff;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.balance-dashboard.is-hidden {
+  display: none;
+}
+
+#balance-dashboard-lobby h3 {
+  color: #2eeaff;
+}
+
+.balance-dashboard h3 {
+  font-size: 16px;
+  margin: 0 0 4px;
+  color: #ff3df4;
+}
+
+.balance-dashboard h4 {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8a8ab0;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+
+.dashboard-subtitle {
+  font-size: 10px;
+  color: #6a6a80;
+  margin: 0 0 4px;
+  letter-spacing: 0.05em;
+}
+
+.param-row {
+  margin-bottom: 12px;
+}
+
+.param-label-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+  gap: 8px;
+}
+
+.param-row label {
+  font-size: 11px;
+  color: #c0c0d0;
+}
+
+.value-group {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.value-input {
+  width: 64px;
+  padding: 2px 6px;
+  background: #1c1c28;
+  border: 1px solid #2a2a3a;
+  border-radius: 3px;
+  color: #ffd84a;
+  font-size: 11px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  text-align: right;
+}
+
+.value-input:focus {
+  outline: none;
+  border-color: #ff3df4;
+}
+
+.value-unit {
+  font-size: 10px;
+  color: #6a6a80;
+}
+
+.param-row input[type=range] {
+  width: 100%;
+  accent-color: #ff3df4;
+}
+
+.dashboard-reset {
+  margin-top: 14px;
+  width: 100%;
+  padding: 8px;
+  background: #2a2a3a;
+  border: 1px solid #4a4a5a;
+  color: #e0e0ff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.dashboard-reset:hover {
+  background: #3a3a4a;
+  border-color: #5a5a6a;
+}
+
+.dashboard-persist {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dashboard-save,
+.dashboard-forget {
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.dashboard-save {
+  background: #1c2a1f;
+  border: 1px solid #2effa2;
+  color: #2effa2;
+}
+
+.dashboard-save:hover {
+  background: #2a3a2c;
+}
+
+.dashboard-forget {
+  background: #2a1c1c;
+  border: 1px solid #ff5a6a;
+  color: #ff8a96;
+}
+
+.dashboard-forget:hover:not(:disabled) {
+  background: #3a2828;
+}
+
+.dashboard-forget:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: #4a4a5a;
+  color: #6a6a80;
+  background: #1a1a22;
+}
+
+.is-flash {
+  animation: dashboardFlash 0.4s ease-out;
+}
+
+@keyframes dashboardFlash {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+.heat-table {
+  display: grid;
+  grid-template-columns: 56px repeat(3, 1fr);
+  gap: 4px 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.heat-header {
+  font-size: 10px;
+  color: #6a6a80;
+  text-align: center;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.heat-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.heat-cell input[type=number] {
+  width: 100%;
+  padding: 4px 6px;
+  background: #1c1c28;
+  border: 1px solid #2a2a3a;
+  border-radius: 3px;
+  color: #ffd84a;
+  font-size: 11px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  text-align: right;
+}
+
+.heat-cell input[type=number]:focus {
+  outline: none;
+  border-color: #ff3df4;
+}
+
+@media (max-width: 1100px) {
+  .balance-dashboard { display: none; }
 }

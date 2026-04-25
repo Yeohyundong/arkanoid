@@ -1,9 +1,8 @@
 import { HEAT_TIERS, stackToTier } from './Heat';
 import type { HeatTier } from './Heat';
+import { balance } from './Balance';
 
 export const BALL_DEFAULT_BASE_SPEED = 500;
-export const BALL_SPEED_STEP = 20;
-export const BALL_MAX_SPEED = 1000;
 
 export class Ball {
   x: number;
@@ -59,17 +58,17 @@ export class Ball {
   }
 
   accelerateOnBounce(): void {
-    this.speed = Math.min(this.speed + BALL_SPEED_STEP, BALL_MAX_SPEED);
+    this.speed = Math.min(this.speed + balance.ballSpeedStep, balance.ballMaxSpeed);
     this.stack += 1;
   }
 
   accelerateWithoutStack(): void {
-    this.speed = Math.min(this.speed + BALL_SPEED_STEP, BALL_MAX_SPEED);
+    this.speed = Math.min(this.speed + balance.ballSpeedStep, balance.ballMaxSpeed);
   }
 
   addHeatStacks(n: number): void {
     this.stack += n;
-    this.speed = Math.min(this.speed + BALL_SPEED_STEP * n, BALL_MAX_SPEED);
+    this.speed = Math.min(this.speed + balance.ballSpeedStep * n, balance.ballMaxSpeed);
   }
 
   grantFireball(durationMs: number): void {
