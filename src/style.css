@@ -11,6 +11,8 @@ html, body {
   overflow: hidden;
   font-family: system-ui, -apple-system, sans-serif;
   color: #e0e0ff;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 
 #app {
@@ -244,4 +246,5 @@ html, body {
 
 @media (max-width: 1100px) {
   .balance-dashboard { display: none; }
+  #app { padding-bottom: 120px; }
 }

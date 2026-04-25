@@ -267,12 +267,10 @@ export class Game {
   }
 
   private updatePaused(): void {
-    if (!this.input.consumeTap()) return;
-    const x = this.input.getPointerX();
-    const y = this.input.getPointerY();
-    if (x === null || y === null) return;
+    const tap = this.input.consumeTap();
+    if (!tap) return;
     for (const b of this.pauseMenuButtons) {
-      if (!this.pointInRect(x, y, b.rect)) continue;
+      if (!this.pointInRect(tap.x, tap.y, b.rect)) continue;
       if (b.action === 'resume') this.setState('playing');
       else this.exitToLobby();
       return;
@@ -280,12 +278,10 @@ export class Game {
   }
 
   private updateMenu(): void {
-    if (!this.input.consumeTap()) return;
-    const x = this.input.getPointerX();
-    const y = this.input.getPointerY();
-    if (x === null || y === null) return;
+    const tap = this.input.consumeTap();
+    if (!tap) return;
 
-    const action = this.menu.hitTest(x, y);
+    const action = this.menu.hitTest(tap.x, tap.y);
     if (action === 'arcade-new') this.startArcadeNew();
     else if (action === 'arcade-continue') this.startArcadeContinue();
     else if (action === 'wave-new') this.startWaveNew();
@@ -347,15 +343,11 @@ export class Game {
   }
 
   private updatePlaying(dt: number): void {
-    const tapped = this.input.consumeTap();
+    const tap = this.input.consumeTap();
 
-    if (tapped) {
-      const px = this.input.getPointerX();
-      const py = this.input.getPointerY();
-      if (px !== null && py !== null && this.pointInRect(px, py, this.pauseButtonRect)) {
-        this.setState('paused');
-        return;
-      }
+    if (tap && this.pointInRect(tap.x, tap.y, this.pauseButtonRect)) {
+      this.setState('paused');
+      return;
     }
 
     if (this.ballAttached && this.balls.length > 0) {
@@ -363,7 +355,7 @@ export class Game {
       const attachOffset = (LAUNCH_ANGLE / MAX_REFLECT_ANGLE) * (this.paddle.width / 2);
       ball.x = this.paddle.x + attachOffset;
       ball.y = this.paddle.top - ball.radius;
-      if (tapped) this.launchBall();
+      if (tap) this.launchBall();
       return;
     }
 
