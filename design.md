@@ -55,6 +55,7 @@
 - 점수 공식: `10 × heat_mult`
 - 공 자체가 등급 색으로 변함 + 오라 강화
 - 시각 피드백: 5 stack마다 공 위치에 플로팅 숫자 (5/15/30은 큰 글자 + shake)
+- **피격 VFX 차등**: 공이 벽돌을 칠 때마다 Heat tier에 비례한 스파크 분사 (콘 모양). COOL은 거의 안 보일 정도, BLAZE는 12개 풀 스파크 + 충격링. 파괴 시엔 기존 destroy 파티클/링이 추가로 발동
 - Stack 리셋: 바닥 아웃 시 해당 공만. 패들 터치로는 리셋 안 됨.
 - Fireball 충돌도 Heat 데미지 그대로 인계 (BLAZE+Fireball = 데미지 3 관통)
 - Heat decay는 의도적 미도입 — 공 가속이 자연스러운 패널티로 작동
@@ -97,10 +98,12 @@
 | **S** Shield     | 파랑 `#4a8eff` | 다음 1회 공이 화면 하단을 넘어가는 순간 자동 튕김 (라이프 안 잃음). 충전된 동안 화면 하단에 푸른 형광 라인. 누적 X | 1회 자동 발동 |
 | **LH** Laser ═   | 보라 `#c44dff` | 4초간 공이 벽돌 충돌 시 같은 행 모든 벽돌에 데미지 1 + 가로 보라 섬광. 줄 데미지로 깬 블록은 점수만 (stack X) | 4초 |
 | **LV** Laser ║   | 보라 `#c44dff` | 4초간 공이 벽돌 충돌 시 같은 열 모든 벽돌에 데미지 1 + 세로 보라 섬광. 줄 데미지로 깬 블록은 점수만 (stack X) | 4초 |
+| **R** Rocket     | 시안 `#4adfff` | 획득 즉시 패들에서 호밍 미사일 1발 발사. **스윗스팟 자동 조준** (폭발 반경 51px 안에 가장 많은 블록이 들어오는 위치 계산). 꼬불꼬불 사선 비행 후 도달 지점에서 폭발 — 범위 내 블록에 데미지 1. 외톨이 1~2개 청소용 | 1회 단발 |
 
 - F/LH/LV 중복 시 타이머 누적, M/S는 보유 1개로 덮어쓰기
 - E가 최대 스택일 때 추가로 먹으면 가장 먼저 만료될 스택을 연장
 - F + LH + LV 동시 활성화 가능 (관통 + 십자 청소 = 화끈한 조합)
+- R은 획득 시점에 타겟 위치 확정 — 비행 도중 타겟 블록이 깨져도 무시하고 그 좌표에서 폭발 (확정 보상)
 - 아이템 획득 시 패들 위에 아이템 색 텍스트 floater (`Multi-Ball!` `Shield Up!` `Laser ═` 등)
 - 레이저 활성 공은 옆에 보라색 펄스 막대(가로/세로)로 표시
 - **스테이지 클리어 시 패들 효과(E/M-charge/S) 완전 리셋**. 공 효과(F/LH/LV/H/멀티볼)는 공이 새로 생성되면서 자동 리셋.
@@ -115,6 +118,7 @@
 - 스테이지 클리어 시 체크포인트 저장 (다음 스테이지 / 점수 / 남은 목숨)
 - 최종 스테이지 클리어 시 "YOU WIN" + 최고 점수 제출
 - Continue로 재개 가능
+- **REVIVE**: 게임오버(목숨 0) 시 1회 한정 부활 버튼. 누르면 라이프 1 부여, 현 스테이지·점수 그대로 재개 (공/아이템/로켓/패들 효과는 리셋). 수익화 전 무료 — 추후 광고 시청 등에 연결 예정
 
 **스테이지 테마 구성** (HP 분포는 Heat 데미지 도입 후 한 단계씩 상향):
 | # | 이름 | 특징 | HP 분포 |
@@ -230,9 +234,10 @@ Game                     // 전체 컨트롤러 + 상태 머신
  ├─ Paddle               // 너비 동적, enlarge 스택 배열, multiBall/Shield 충전 상태
  ├─ Brick[]              // HP(mutable y for wave descent), itemType, itemSpawnedAt
  ├─ Item[]               // 낙하 중인 캡슐 (바운스)
+ ├─ Rocket[]             // R 아이템 호밍 미사일 (스윗스팟 commit, 비행 중 retarget X)
  ├─ ComboFloater[]       // 공 위 플로팅 숫자 + 1UP/아이템 텍스트 (label/colorOverride)
- ├─ Particle[]           // 벽돌 파괴 파편 (capped @ 240)
- ├─ ShockRing[]          // 파괴 충격파 (tier에 따라 크기, capped @ 20)
+ ├─ Particle[]           // 벽돌 파괴/피격 파편 (capped @ 240)
+ ├─ ShockRing[]          // 파괴 충격파 + 로켓 폭발 디스크(filled) + Heat 2~3 피격 링 (capped @ 20)
  ├─ LaserFlash[]         // 레이저 가로/세로 섬광 1회 (capped @ 10)
  ├─ InputHandler         // Pointer Events + window-level tap
  ├─ AudioManager         // WebAudio 비프/스윕 (paddle/brick/destroy/pickup/launch)

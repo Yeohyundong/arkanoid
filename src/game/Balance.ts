@@ -17,7 +17,7 @@ export interface BalanceParams {
 
 export const DEFAULT_BALANCE: BalanceParams = {
   ballSpeedStep: 10,
-  ballMaxSpeed: 800,
+  ballMaxSpeed: 1000,
   enlargeDurationMs: 8000,
   fireballDurationMs: 5000,
   laserDurationMs: 4000,
@@ -36,7 +36,7 @@ export function resetBalance(): void {
   Object.assign(balance, DEFAULT_BALANCE);
 }
 
-const STORAGE_KEY = 'arkanoid:balance:dev:v1';
+const STORAGE_KEY = 'arkanoid:balance:dev:v2';
 
 interface SavedSnapshot {
   balance: Partial<BalanceParams>;

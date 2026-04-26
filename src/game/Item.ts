@@ -1,6 +1,6 @@
-export type ItemType = 'M' | 'E' | 'F' | 'H' | 'S' | 'LH' | 'LV';
+export type ItemType = 'M' | 'E' | 'F' | 'H' | 'S' | 'LH' | 'LV' | 'R';
 
-export const ITEM_POOL: ItemType[] = ['M', 'E', 'F', 'H', 'S', 'LH', 'LV'];
+export const ITEM_POOL: ItemType[] = ['M', 'E', 'F', 'H', 'S', 'LH', 'LV', 'R'];
 
 export const ITEM_COLORS: Record<ItemType, string> = {
   M: '#2effa2',
@@ -10,6 +10,7 @@ export const ITEM_COLORS: Record<ItemType, string> = {
   S: '#4a8eff',
   LH: '#c44dff',
   LV: '#c44dff',
+  R: '#4adfff',
 };
 
 export const ITEM_LABELS: Record<ItemType, string> = {
@@ -20,6 +21,7 @@ export const ITEM_LABELS: Record<ItemType, string> = {
   S: 'S',
   LH: '═',
   LV: '║',
+  R: 'R',
 };
 
 export const ITEM_NAMES: Record<ItemType, string> = {
@@ -30,6 +32,7 @@ export const ITEM_NAMES: Record<ItemType, string> = {
   S: 'Shield Up!',
   LH: 'Laser ═',
   LV: 'Laser ║',
+  R: 'Rocket!',
 };
 
 export const ITEM_FALL_SPEED = 220;

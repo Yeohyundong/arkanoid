@@ -20,6 +20,9 @@ import { Item, ITEM_POOL, ITEM_COLORS, ITEM_NAMES } from './Item';
 import { balance } from './Balance';
 import type { ItemType } from './Item';
 import { AudioManager } from './Audio';
+import { Rocket, ROCKET_EXPLOSION_RADIUS, ROCKET_EXPLOSION_DAMAGE } from './Rocket';
+
+const ROCKET_RADIUS_ARRIVE = 10;
 
 export const GAME_WIDTH = 540;
 export const GAME_HEIGHT = 960;
@@ -78,6 +81,7 @@ interface ShockRing {
   color: string;
   maxRadius: number;
   lifetimeMs: number;
+  filled?: boolean;
 }
 
 interface LaserFlash {
@@ -96,6 +100,15 @@ const MAX_SHOCK_RINGS = 20;
 const MAX_FLOATERS = 40;
 const MAX_LASER_FLASHES = 10;
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace('#', '');
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16),
+  };
+}
+
 export class Game {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly paddle: Paddle;
@@ -109,6 +122,7 @@ export class Game {
   private balls: Ball[] = [];
   private bricks: Brick[] = [];
   private items: Item[] = [];
+  private rockets: Rocket[] = [];
   private score = 0;
   private baseSpeed = BASE_SPEED;
   private state: GameState = 'menu';
@@ -126,8 +140,10 @@ export class Game {
   private thresholdY = 0;
   private lastRunNewBest = false;
   private lastRunVictory = false;
+  private reviveUsed = false;
   private readonly pauseButtonRect: Rect;
   private readonly pauseMenuButtons: { action: PauseAction; rect: Rect }[];
+  private readonly reviveButtonRect: Rect;
 
   constructor(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -163,6 +179,12 @@ export class Game {
         rect: { x: menuBtnX, y: GAME_HEIGHT / 2 + 40, w: PAUSE_MENU_BTN_W, h: PAUSE_MENU_BTN_H },
       },
     ];
+    this.reviveButtonRect = {
+      x: menuBtnX,
+      y: GAME_HEIGHT / 2 + 130,
+      w: PAUSE_MENU_BTN_W,
+      h: PAUSE_MENU_BTN_H,
+    };
 
     this.refreshMenu();
     this.installPauseKey();
@@ -261,9 +283,36 @@ export class Game {
         if (this.input.consumeTap()) this.advanceArcadeStage();
         break;
       case 'ending':
-        if (this.input.consumeTap()) this.returnToMenu();
+        this.updateEnding();
         break;
     }
+  }
+
+  private updateEnding(): void {
+    const tap = this.input.consumeTap();
+    if (!tap) return;
+    if (this.canRevive() && this.pointInRect(tap.x, tap.y, this.reviveButtonRect)) {
+      this.revive();
+      return;
+    }
+    this.returnToMenu();
+  }
+
+  private canRevive(): boolean {
+    return this.mode === 'arcade' && !this.lastRunVictory && !this.reviveUsed;
+  }
+
+  private revive(): void {
+    this.reviveUsed = true;
+    this.arcadeLives = 1;
+    this.items = [];
+    this.rockets = [];
+    this.floaters = [];
+    this.paddle.resetEffects();
+    this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
+    this.ballAttached = true;
+    this.nextItemSpawnAt = performance.now() + balance.itemSpawnIntervalMs;
+    this.setState('playing');
   }
 
   private updatePaused(): void {
@@ -292,6 +341,7 @@ export class Game {
     this.mode = 'arcade';
     this.score = 0;
     this.arcadeLives = balance.arcadeStartingLives;
+    this.reviveUsed = false;
     this.loadArcade(0);
     this.setState('playing');
     this.refreshMenu();
@@ -303,6 +353,7 @@ export class Game {
     this.mode = 'arcade';
     this.score = cp.score;
     this.arcadeLives = cp.lives;
+    this.reviveUsed = false;
     this.loadArcade(cp.stageIndex);
     this.setState('playing');
   }
@@ -321,6 +372,7 @@ export class Game {
     this.baseSpeed = data.baseSpeed;
     this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
     this.items = [];
+    this.rockets = [];
     this.ballAttached = true;
     this.floaters = [];
     this.paddle.resetEffects();
@@ -333,6 +385,7 @@ export class Game {
     this.baseSpeed = data.baseSpeed;
     this.balls = [new Ball(this.paddle.x, this.paddle.top - 10, this.baseSpeed)];
     this.items = [];
+    this.rockets = [];
     this.ballAttached = true;
     this.floaters = [];
     this.paddle.resetEffects();
@@ -380,6 +433,7 @@ export class Game {
         this.emitComboMilestones(ball, prevStack);
       }
       this.updateItems(subDt);
+      this.updateRockets(subDt);
       this.updateParticles(subDt);
       if (this.mode === 'arcade') this.checkArcadeClear();
       if (this.state !== 'playing') return;
@@ -600,15 +654,17 @@ export class Game {
         }
       }
 
-      const dmg = HEAT_TIERS[ball.getHeatTier()].damage;
+      const tier = ball.getHeatTier();
+      const dmg = HEAT_TIERS[tier].damage;
       brick.damage(dmg);
       if (ball.isFireball) ball.accelerateWithoutStack();
       else ball.accelerateOnBounce();
       this.awardBrickHitScore(ball);
+      this.spawnHitSparks(cx, cy, ball, brick, tier);
 
       if (brick.destroyed) {
-        this.spawnDestroyParticles(brick, ball.getHeatTier());
-        this.spawnShockRing(brick, ball.getHeatTier());
+        this.spawnDestroyParticles(brick, tier);
+        this.spawnShockRing(brick, tier);
         this.audio.brickDestroy();
         if (brick.itemType) {
           this.items.push(new Item(brick.x, brick.y, brick.itemType));
@@ -678,6 +734,51 @@ export class Game {
         color: useTierColor ? tierColor : brick.color,
         bornAt: now,
         size: (4 + Math.random() * 3) * sizeBoost,
+      });
+    }
+  }
+
+  private spawnHitSparks(contactX: number, contactY: number, ball: Ball, brick: Brick, tier: HeatTier): void {
+    const now = performance.now();
+    const tierColor = HEAT_TIERS[tier].color;
+
+    const dx = ball.x - contactX;
+    const dy = ball.y - contactY;
+    const len = Math.hypot(dx, dy) || 1;
+    const baseAngle = Math.atan2(dy / len, dx / len);
+
+    const baseCount = tier === 0 ? 2 : 3 + tier * 3;
+    const count = Math.min(baseCount, MAX_PARTICLES - this.particles.length);
+    const speedMin = tier === 0 ? 70 : 110 + tier * 45;
+    const speedMax = tier === 0 ? 140 : 220 + tier * 80;
+    const sizeBoost = tier === 0 ? 0.65 : 1 + tier * 0.25;
+    const tierColorChance = 0.35 + tier * 0.18;
+
+    for (let i = 0; i < count; i++) {
+      const spread = (Math.random() - 0.5) * Math.PI;
+      const angle = baseAngle + spread;
+      const speed = speedMin + Math.random() * (speedMax - speedMin);
+      const useTierColor = tier > 0 && Math.random() < tierColorChance;
+      this.particles.push({
+        x: contactX,
+        y: contactY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 20,
+        color: useTierColor ? tierColor : brick.color,
+        bornAt: now,
+        size: (2 + Math.random() * 1.5) * sizeBoost,
+      });
+    }
+
+    if (tier >= 2) {
+      if (this.shockRings.length >= MAX_SHOCK_RINGS) this.shockRings.shift();
+      this.shockRings.push({
+        x: contactX,
+        y: contactY,
+        bornAt: now,
+        color: tierColor,
+        maxRadius: 16 + tier * 8,
+        lifetimeMs: 200 + tier * 50,
       });
     }
   }
@@ -785,6 +886,25 @@ export class Game {
     for (const r of this.shockRings) {
       const t = (now - r.bornAt) / r.lifetimeMs;
       if (t >= 1) continue;
+
+      if (r.filled) {
+        const expandT = Math.min(1, t / 0.18);
+        const radius = r.maxRadius * (0.3 + 0.7 * expandT);
+        const alpha = (1 - t) * 0.85;
+        const rgb = hexToRgb(r.color);
+        const grad = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, radius);
+        grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+        grad.addColorStop(0.35, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha * 0.85})`);
+        grad.addColorStop(0.85, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha * 0.35})`);
+        grad.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+
       const radius = r.maxRadius * (0.2 + t * 0.8);
       const alpha = (1 - t) * 0.7;
       ctx.globalAlpha = alpha;
@@ -802,6 +922,100 @@ export class Game {
   private awardBrickHitScore(ball: Ball): void {
     const heatMult = HEAT_TIERS[ball.getHeatTier()].mult;
     this.score += Math.round(balance.brickScore * heatMult);
+  }
+
+  private updateRockets(dt: number): void {
+    for (let i = this.rockets.length - 1; i >= 0; i--) {
+      const r = this.rockets[i];
+      r.update(dt);
+
+      if (r.x < -20 || r.x > GAME_WIDTH + 20 || r.y < -20 || r.y > GAME_HEIGHT + 20) {
+        this.rockets.splice(i, 1);
+        continue;
+      }
+
+      let detonate = false;
+
+      if (r.target) {
+        const dx = r.target.x - r.x;
+        const dy = r.target.y - r.y;
+        const arriveR = ROCKET_RADIUS_ARRIVE;
+        if (dx * dx + dy * dy <= arriveR * arriveR) {
+          r.x = r.target.x;
+          r.y = r.target.y;
+          detonate = true;
+        }
+      } else if (r.expired) {
+        detonate = true;
+      }
+
+      if (detonate) {
+        this.detonateRocket(r);
+        this.rockets.splice(i, 1);
+      } else if (r.expired) {
+        this.rockets.splice(i, 1);
+      }
+    }
+  }
+
+  private detonateRocket(r: Rocket): void {
+    const r2 = ROCKET_EXPLOSION_RADIUS * ROCKET_EXPLOSION_RADIUS;
+    for (const brick of this.bricks) {
+      if (brick.destroyed) continue;
+      if (brick.itemType) continue;
+      const dx = brick.x - r.x;
+      const dy = brick.y - r.y;
+      if (dx * dx + dy * dy > r2) continue;
+
+      brick.damage(ROCKET_EXPLOSION_DAMAGE);
+      this.score += balance.brickScore;
+
+      if (brick.destroyed) {
+        this.spawnDestroyParticles(brick, 0);
+        this.spawnShockRing(brick, 0);
+      }
+    }
+    this.spawnExplosionVfx(r.x, r.y);
+    this.audio.brickDestroy();
+  }
+
+  private spawnExplosionVfx(x: number, y: number): void {
+    const now = performance.now();
+
+    if (this.shockRings.length >= MAX_SHOCK_RINGS) this.shockRings.shift();
+    this.shockRings.push({
+      x, y,
+      bornAt: now,
+      color: '#ffd54a',
+      maxRadius: ROCKET_EXPLOSION_RADIUS,
+      lifetimeMs: 380,
+      filled: true,
+    });
+
+    if (this.shockRings.length >= MAX_SHOCK_RINGS) this.shockRings.shift();
+    this.shockRings.push({
+      x, y,
+      bornAt: now,
+      color: '#fff3a8',
+      maxRadius: ROCKET_EXPLOSION_RADIUS,
+      lifetimeMs: 260,
+    });
+
+    const count = Math.min(20, MAX_PARTICLES - this.particles.length);
+    const speedMin = (ROCKET_EXPLOSION_RADIUS / (PARTICLE_LIFETIME_MS / 1000)) * 0.7;
+    const speedMax = (ROCKET_EXPLOSION_RADIUS / (PARTICLE_LIFETIME_MS / 1000)) * 1.3;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.4;
+      const speed = speedMin + Math.random() * (speedMax - speedMin);
+      this.particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 30,
+        color: Math.random() < 0.55 ? '#ffd54a' : '#ff6a2e',
+        bornAt: now,
+        size: 3 + Math.random() * 3,
+      });
+    }
   }
 
   private updateItems(dt: number): void {
@@ -862,7 +1076,43 @@ export class Game {
       case 'S': this.paddle.chargeShield(); break;
       case 'LH': for (const b of this.balls) b.grantLaserHorizontal(balance.laserDurationMs); break;
       case 'LV': for (const b of this.balls) b.grantLaserVertical(balance.laserDurationMs); break;
+      case 'R': this.spawnRocket(); break;
     }
+  }
+
+  private spawnRocket(): void {
+    const x = this.paddle.x;
+    const y = this.paddle.top - 6;
+    const target = this.findSweetSpotBrick(x, y);
+    this.rockets.push(new Rocket(x, y, -Math.PI / 2, target));
+  }
+
+  private findSweetSpotBrick(originX: number, originY: number): Brick | null {
+    let best: Brick | null = null;
+    let bestCount = -1;
+    let bestDistSq = Infinity;
+    const r2 = ROCKET_EXPLOSION_RADIUS * ROCKET_EXPLOSION_RADIUS;
+
+    for (const candidate of this.bricks) {
+      if (candidate.destroyed || candidate.itemType) continue;
+
+      let count = 0;
+      for (const other of this.bricks) {
+        if (other.destroyed || other.itemType) continue;
+        const dx = other.x - candidate.x;
+        const dy = other.y - candidate.y;
+        if (dx * dx + dy * dy <= r2) count++;
+      }
+
+      const distSq = (candidate.x - originX) ** 2 + (candidate.y - originY) ** 2;
+      if (count > bestCount || (count === bestCount && distSq < bestDistSq)) {
+        bestCount = count;
+        bestDistSq = distSq;
+        best = candidate;
+      }
+    }
+
+    return best;
   }
 
   private heatBoost(): void {
@@ -947,6 +1197,7 @@ export class Game {
     this.drawShockRings();
     this.drawLaserFlashes();
     for (const item of this.items) item.draw(ctx);
+    for (const r of this.rockets) r.draw(ctx);
     this.paddle.draw(ctx);
     for (const ball of this.balls) ball.draw(ctx);
     this.drawFloaters();
@@ -1228,10 +1479,36 @@ export class Game {
         ctx.fillText(`BEST  ${savedBest}`, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 30);
       }
 
-      ctx.fillStyle = '#c0c0ff';
-      ctx.font = '500 20px system-ui, sans-serif';
-      ctx.fillText('Tap to return', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 90);
+      if (this.canRevive()) {
+        this.drawReviveButton();
+        ctx.fillStyle = '#8a8ab0';
+        ctx.font = '500 16px system-ui, sans-serif';
+        ctx.fillText('Tap elsewhere to return', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 90);
+      } else {
+        ctx.fillStyle = '#c0c0ff';
+        ctx.font = '500 20px system-ui, sans-serif';
+        ctx.fillText('Tap to return', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 90);
+      }
     }
+    ctx.restore();
+  }
+
+  private drawReviveButton(): void {
+    const { ctx } = this;
+    const r = this.reviveButtonRect;
+    const accent = '#2effa2';
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 16;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = accent;
+    ctx.font = '700 24px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('REVIVE', r.x + r.w / 2, r.y + r.h / 2);
     ctx.restore();
   }
 }
