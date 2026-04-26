@@ -121,7 +121,7 @@ export class MainMenu {
       },
       {
         action: 'wave-new',
-        label: 'WAVE',
+        label: 'WAVE (beta)',
         sub: `BEST ${this.waveHigh}`,
         x,
         y: 580,
