@@ -201,8 +201,12 @@ export class Game {
   }
 
   private setState(next: GameState): void {
+    const prev = this.state;
     this.state = next;
     this.updateCursorVisibility();
+    if (next === 'paused') this.audio.pauseBgm();
+    else if (prev === 'paused') this.audio.resumeBgm();
+    if (next === 'playing') this.audio.startBgm();
     for (const l of this.stateListeners) l(next);
   }
 
@@ -691,6 +695,7 @@ export class Game {
       pos: axis === 'h' ? originBrick.y : originBrick.x,
       bornAt: performance.now(),
     });
+    this.audio.laserHit();
 
     for (const brick of this.bricks) {
       if (brick.destroyed) continue;
@@ -976,7 +981,7 @@ export class Game {
       }
     }
     this.spawnExplosionVfx(r.x, r.y);
-    this.audio.brickDestroy();
+    this.audio.rocketExplode();
   }
 
   private spawnExplosionVfx(x: number, y: number): void {
@@ -1085,6 +1090,7 @@ export class Game {
     const y = this.paddle.top - 6;
     const target = this.findSweetSpotBrick(x, y);
     this.rockets.push(new Rocket(x, y, -Math.PI / 2, target));
+    this.audio.rocketLaunch();
   }
 
   private findSweetSpotBrick(originX: number, originY: number): Brick | null {
